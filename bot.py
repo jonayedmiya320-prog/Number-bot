@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 # ─── Configuration ───
 BOT_TOKEN = "8778774923:AAGN6KKbKi7dXAk6gtwQ3Y5LRIz8YgTaRn0"
-ADMIN_PASSWORD = "Earnmaster"
+ADMIN_PASSWORD = "Asifshadin"
 
 MAIN_CHANNEL     = "@+QylG3hEY19c1Y2Y0"
 MAIN_CHANNEL_URL = "https://t.me/+ejnPW9QGW9s0NDc0"
