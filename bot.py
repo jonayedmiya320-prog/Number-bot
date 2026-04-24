@@ -29,16 +29,16 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 # ─── Configuration ───
-BOT_TOKEN = "8672122739:AAGXzye3H-78dPMswDLCzMLkkoimcDCqihY"
-ADMIN_PASSWORD = "sadhin23954826"
+BOT_TOKEN = "8778774923:AAGN6KKbKi7dXAk6gtwQ3Y5LRIz8YgTaRn0"
+ADMIN_PASSWORD = "Earnmaster"
 
-MAIN_CHANNEL     = "@earning_hub_official_channel"
-MAIN_CHANNEL_URL = "https://t.me/earning_hub_official_channel"
-MAIN_CHANNEL_ID  = -1003543718769
-CHAT_GROUP       = "https://t.me/earning_hub_number_channel"
-CHAT_GROUP_ID    = -1003875142184
-OTP_GROUP        = "https://t.me/EarningHub_otp"
-OTP_GROUP_ID     = -1003247504066
+MAIN_CHANNEL     = "@+QylG3hEY19c1Y2Y0"
+MAIN_CHANNEL_URL = "https://t.me/+ejnPW9QGW9s0NDc0"
+MAIN_CHANNEL_ID  = -1001579502447
+CHAT_GROUP       = "https://t.me/+RmiAXvgxUtw3ZTU1"
+CHAT_GROUP_ID    = -1003672144557
+OTP_GROUP        = "https://t.me/earnmasterotp"
+OTP_GROUP_ID     = -1003774165897
 
 # ─── Baileys API (WhatsApp) ───
 BAILEYS_URL = os.environ.get("BAILEYS_URL", "http://localhost:3000")
@@ -1784,9 +1784,9 @@ async def cb_totp_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── Support & Help ───
 async def handle_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "💬 *Support*\n\nContact admin:\n📌 @sadhin8miya",
+        "💬 *Support*\n\nContact admin:\n📌 @Asif_store_bot",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Contact", url="https://t.me/sadhin8miya")]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Contact", url="https://t.me/Asif_store_bot")]])
     )
 
 async def handle_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
