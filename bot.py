@@ -1,6 +1,7 @@
 """
 Earning Hub Number Bot - Python Version
 All features: Numbers, WhatsApp Check, OTP, Earnings, Withdraw, 2FA, TempMail, Admin
+Database: PostgreSQL (Railway)
 """
 
 import os
@@ -18,6 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pyotp
+import psycopg2
+import psycopg2.pool
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
@@ -43,25 +46,26 @@ OTP_GROUP_ID     = -1003774165897
 # ─── Baileys API (WhatsApp) ───
 BAILEYS_URL = os.environ.get("BAILEYS_URL", "http://localhost:3000")
 
-# ─── Data Directory ───
-DATA_DIR = os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", os.path.dirname(os.path.abspath(__file__)))
-logger.info(f"📁 Data Directory: {DATA_DIR}")
+# ─── Database URL (Railway এ auto-set হয়) ───
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+if not DATABASE_URL:
+    raise RuntimeError("❌ DATABASE_URL নেই! Railway PostgreSQL plugin যোগ করুন।")
 
-# ─── File Paths ───
-NUMBERS_FILE       = os.path.join(DATA_DIR, "numbers.txt")
-COUNTRIES_FILE     = os.path.join(DATA_DIR, "countries.json")
-USERS_FILE         = os.path.join(DATA_DIR, "users.json")
-SERVICES_FILE      = os.path.join(DATA_DIR, "services.json")
-ACTIVE_NUMBERS_FILE= os.path.join(DATA_DIR, "active_numbers.json")
-OTP_LOG_FILE       = os.path.join(DATA_DIR, "otp_log.json")
-ADMINS_FILE        = os.path.join(DATA_DIR, "admins.json")
-SETTINGS_FILE      = os.path.join(DATA_DIR, "settings.json")
-TOTP_SECRETS_FILE  = os.path.join(DATA_DIR, "totp_secrets.json")
-TEMP_MAILS_FILE    = os.path.join(DATA_DIR, "temp_mails.json")
-EARNINGS_FILE      = os.path.join(DATA_DIR, "earnings.json")
-WITHDRAW_FILE      = os.path.join(DATA_DIR, "withdrawals.json")
-COUNTRY_PRICES_FILE= os.path.join(DATA_DIR, "country_prices.json")
-WA_OWNER_FILE      = os.path.join(DATA_DIR, "wa_owner.json")
+# ─── DB Key Constants (file path এর বদলে string key) ───
+NUMBERS_FILE        = "numbers_txt"
+COUNTRIES_FILE      = "countries"
+USERS_FILE          = "users"
+SERVICES_FILE       = "services"
+ACTIVE_NUMBERS_FILE = "active_numbers"
+OTP_LOG_FILE        = "otp_log"
+ADMINS_FILE         = "admins"
+SETTINGS_FILE       = "settings"
+TOTP_SECRETS_FILE   = "totp_secrets"
+TEMP_MAILS_FILE     = "temp_mails"
+EARNINGS_FILE       = "earnings"
+WITHDRAW_FILE       = "withdrawals"
+COUNTRY_PRICES_FILE = "country_prices"
+WA_OWNER_FILE       = "wa_owner"
 
 # ─── Default Settings ───
 DEFAULT_SETTINGS = {
@@ -74,22 +78,81 @@ DEFAULT_SETTINGS = {
     "withdrawEnabled": True
 }
 
-# ─── Load/Save Helpers ───
-def load_json(path, default):
+# ═══════════════════════════════════════════════
+# ─── PostgreSQL Connection Pool ───
+# ═══════════════════════════════════════════════
+_db_pool = None
+
+def get_db_pool():
+    global _db_pool
+    if _db_pool is None:
+        dsn = DATABASE_URL
+        # Railway PostgreSQL SSL require করে
+        if "sslmode" not in dsn:
+            sep = "&" if "?" in dsn else "?"
+            dsn += sep + "sslmode=require"
+        _db_pool = psycopg2.pool.ThreadedConnectionPool(
+            minconn=2, maxconn=15, dsn=dsn
+        )
+        logger.info("✅ DB connection pool তৈরি হয়েছে")
+    return _db_pool
+
+def db_init():
+    """প্রথম deploy এ table তৈরি করে"""
+    pool = get_db_pool()
+    conn = pool.getconn()
     try:
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS bot_data (
+                    key   TEXT PRIMARY KEY,
+                    value TEXT NOT NULL DEFAULT '{}'
+                )
+            """)
+        conn.commit()
+        logger.info("✅ Database initialized — bot_data table ready")
     except Exception as e:
-        logger.error(f"Error loading {path}: {e}")
+        logger.error(f"❌ DB init error: {e}")
+        raise
+    finally:
+        pool.putconn(conn)
+
+# ═══════════════════════════════════════════════
+# ─── Load/Save Helpers (DB-based) ───
+# ═══════════════════════════════════════════════
+
+def load_json(key, default):
+    """DB থেকে JSON লোড করে"""
+    pool = get_db_pool()
+    conn = pool.getconn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT value FROM bot_data WHERE key = %s", (key,))
+            row = cur.fetchone()
+            if row and row[0]:
+                return json.loads(row[0])
+    except Exception as e:
+        logger.error(f"DB load error [{key}]: {e}")
+    finally:
+        pool.putconn(conn)
     return default
 
-def save_json(path, data):
+def save_json(key, data):
+    """DB তে JSON সেভ করে"""
+    pool = get_db_pool()
+    conn = pool.getconn()
     try:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO bot_data (key, value)
+                VALUES (%s, %s)
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+            """, (key, json.dumps(data, ensure_ascii=False)))
+        conn.commit()
     except Exception as e:
-        logger.error(f"Error saving {path}: {e}")
+        logger.error(f"DB save error [{key}]: {e}")
+    finally:
+        pool.putconn(conn)
 
 # ─── Load Data ───
 settings       = load_json(SETTINGS_FILE, DEFAULT_SETTINGS)
@@ -312,51 +375,74 @@ services = load_json(SERVICES_FILE, {
 numbers_by_cs = {}  # { country_code: { service: [numbers] } }
 
 def load_numbers():
+    """DB থেকে numbers লোড করে"""
     global numbers_by_cs
     numbers_by_cs = {}
-    if not os.path.exists(NUMBERS_FILE):
-        return
+    pool = get_db_pool()
+    conn = pool.getconn()
     try:
-        with open(NUMBERS_FILE, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                if "|" in line:
-                    parts = line.split("|")
-                    if len(parts) >= 3:
-                        num, cc, svc = parts[0].strip(), parts[1].strip(), parts[2].strip()
-                    elif len(parts) == 2:
-                        num, cc, svc = parts[0].strip(), parts[1].strip(), "other"
-                    else:
-                        continue
-                else:
-                    num = line
-                    cc  = get_country_code_from_number(num)
-                    svc = "other"
-                if not re.match(r"^\d{10,15}$", num):
-                    continue
-                if not cc:
-                    continue
-                numbers_by_cs.setdefault(cc, {}).setdefault(svc, [])
-                if num not in numbers_by_cs[cc][svc]:
-                    numbers_by_cs[cc][svc].append(num)
-        total = sum(len(nums) for cc in numbers_by_cs.values() for nums in cc.values())
-        logger.info(f"✅ Loaded {total} numbers")
+        with conn.cursor() as cur:
+            cur.execute("SELECT value FROM bot_data WHERE key = %s", (NUMBERS_FILE,))
+            row = cur.fetchone()
+            if not row or not row[0]:
+                logger.info("📋 Numbers DB-তে নেই — empty শুরু")
+                return
+            content = row[0]
     except Exception as e:
-        logger.error(f"Error loading numbers: {e}")
+        logger.error(f"Error loading numbers from DB: {e}")
+        return
+    finally:
+        pool.putconn(conn)
+
+    for line in content.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if "|" in line:
+            parts = line.split("|")
+            if len(parts) >= 3:
+                num, cc, svc = parts[0].strip(), parts[1].strip(), parts[2].strip()
+            elif len(parts) == 2:
+                num, cc, svc = parts[0].strip(), parts[1].strip(), "other"
+            else:
+                continue
+        else:
+            num = line
+            cc  = get_country_code_from_number(num)
+            svc = "other"
+        if not re.match(r"^\d{10,15}$", num):
+            continue
+        if not cc:
+            continue
+        numbers_by_cs.setdefault(cc, {}).setdefault(svc, [])
+        if num not in numbers_by_cs[cc][svc]:
+            numbers_by_cs[cc][svc].append(num)
+
+    total = sum(len(nums) for cc in numbers_by_cs.values() for nums in cc.values())
+    logger.info(f"✅ Loaded {total} numbers from DB")
 
 def save_numbers():
+    """numbers DB তে সেভ করে"""
+    lines = []
+    for cc, svcs in numbers_by_cs.items():
+        for svc, nums in svcs.items():
+            for num in nums:
+                lines.append(f"{num}|{cc}|{svc}")
+    content = "\n".join(lines)
+    pool = get_db_pool()
+    conn = pool.getconn()
     try:
-        lines = []
-        for cc, svcs in numbers_by_cs.items():
-            for svc, nums in svcs.items():
-                for num in nums:
-                    lines.append(f"{num}|{cc}|{svc}")
-        with open(NUMBERS_FILE, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines))
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO bot_data (key, value)
+                VALUES (%s, %s)
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+            """, (NUMBERS_FILE, content))
+        conn.commit()
     except Exception as e:
-        logger.error(f"Error saving numbers: {e}")
+        logger.error(f"Error saving numbers to DB: {e}")
+    finally:
+        pool.putconn(conn)
 
 load_numbers()
 
@@ -374,7 +460,7 @@ async def safe_edit(query, text, **kwargs):
         else:
             raise
 
-# ─── Async Save Helpers (heavy file I/O — event loop block করে না) ───
+# ─── Async Save Helpers ───
 async def async_save_numbers():
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, save_numbers)
@@ -398,6 +484,7 @@ async def async_save_earnings():
 async def async_save_withdrawals():
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, save_withdrawals)
+
 def save_users():       save_json(USERS_FILE, users)
 def save_active():      save_json(ACTIVE_NUMBERS_FILE, active_numbers)
 def save_otp_log():     save_json(OTP_LOG_FILE, otp_log[-1000:])
@@ -409,13 +496,6 @@ def save_withdrawals(): save_json(WITHDRAW_FILE, withdrawals)
 def save_cp():          save_json(COUNTRY_PRICES_FILE, country_prices)
 def save_countries():   save_json(COUNTRIES_FILE, countries)
 def save_services():    save_json(SERVICES_FILE, services)
-
-if not os.path.exists(SETTINGS_FILE):
-    save_settings()
-if not os.path.exists(COUNTRIES_FILE):
-    save_countries()
-if not os.path.exists(SERVICES_FILE):
-    save_services()
 
 # ─── Helper Functions ───
 def is_admin(user_id: str) -> bool:
@@ -452,7 +532,6 @@ def get_time_ago(dt_str: str) -> str:
         if not dt_str:
             return "unknown"
         dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
-        # Naive datetime হলে UTC ধরে নাও
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         now = datetime.now(timezone.utc)
@@ -476,7 +555,6 @@ async def get_multiple_numbers(cc: str, svc: str, uid: str, count: int) -> list:
     pool = numbers_by_cs[cc][svc]
     if not pool:
         return []
-    # pool-এ যত আছে তত দাও — count-এর কম হলেও দাও
     give = min(count, len(pool))
     nums = pool[:give]
     numbers_by_cs[cc][svc] = pool[give:]
@@ -500,8 +578,7 @@ def find_matching_active_number(text: str):
         if num in text:
             return num
 
-    # ── Strategy 2: Masked format — "79215***3002" বা "7921*****002" ──
-    # Text থেকে masked pattern বের করো: digits + stars + digits
+    # ── Strategy 2: Masked format ──
     masked_patterns = re.findall(r'(\d{3,})\*+(\d{2,})', text)
     if masked_patterns:
         for prefix, suffix in masked_patterns:
@@ -509,8 +586,7 @@ def find_matching_active_number(text: str):
                 if num.startswith(prefix) and num.endswith(suffix):
                     return num
 
-    # ── Strategy 3: "Number: XXXXX" field থেকে prefix match ──
-    # "Number: 79215***3002" থেকে প্রথম digits বের করো
+    # ── Strategy 3: "Number:" field ──
     num_field = re.search(r'[Nn]umber[:\s]+(\d{4,})', text)
     if num_field:
         prefix = num_field.group(1)
@@ -525,10 +601,8 @@ def find_matching_active_number(text: str):
     for num in list(active_numbers.keys()):
         if num[-6:] in text:
             return num
-    # Last 4 — শুধু যদি text-এ exact masked pattern থাকে
     for num in list(active_numbers.keys()):
         suffix4 = num[-4:]
-        # Avoid false positives — শুধু ***XXXX বা number field-এ match করো
         if re.search(r'\*+' + re.escape(suffix4) + r'\b', text):
             return num
 
@@ -536,11 +610,8 @@ def find_matching_active_number(text: str):
 
 def extract_otp(text: str):
     patterns = [
-        # OTP Monitor Bot format: "OTP Code: 111111"
         r'OTP\s*Code[:\s]+(\d{4,8})',
-        # "G-111111" Google style
         r'\b[A-Z]-(\d{4,8})\b',
-        # Generic: otp/code/pin keyword near digits
         r'(?:otp|code|pin|verification|verify|token)[^\d]{0,10}(\d{4,8})',
         r'(?:is|has|:)\s*(\d{4,8})\b',
         r'\b(\d{6})\b',
@@ -555,7 +626,6 @@ def extract_otp(text: str):
 def generate_totp(secret: str):
     try:
         clean = secret.replace(" ", "").replace("-", "").upper()
-        # Add base32 padding if needed (pyotp requires padding)
         missing_padding = (8 - len(clean) % 8) % 8
         if missing_padding:
             clean += "=" * missing_padding
@@ -591,7 +661,6 @@ def baileys_request(method: str, path: str, body=None) -> dict:
         return {}
 
 async def green_get_state(uid: str = None) -> str:
-    """authorized / notAuthorized — per user"""
     loop   = asyncio.get_event_loop()
     path   = f"/status?userId={uid}" if uid else "/status?userId=global"
     result = await loop.run_in_executor(None, lambda: baileys_request("GET", path))
@@ -600,11 +669,7 @@ async def green_get_state(uid: str = None) -> str:
     return "notAuthorized"
 
 async def green_api_monitor(app):
-    """
-    Background task — সব user এর Baileys connection পর্যবেক্ষণ।
-    """
     logger.info("🟢 Baileys monitor started")
-
     while True:
         await asyncio.sleep(30)
         try:
@@ -635,15 +700,11 @@ async def green_api_monitor(app):
             logger.error(f"Baileys monitor loop error: {e}")
 
 async def get_wa_pairing_code(phone: str, user_id: str) -> str:
-    """
-    Baileys pairing code — per user session।
-    """
     digits = re.sub(r"\D", "", phone)
     logger.info(f"📱 Baileys pairing for: +{digits} uid={user_id}")
 
     loop = asyncio.get_event_loop()
 
-    # Session start করো
     await loop.run_in_executor(
         None,
         lambda: baileys_request("POST", "/start", {"userId": user_id})
@@ -654,6 +715,7 @@ async def get_wa_pairing_code(phone: str, user_id: str) -> str:
         None,
         lambda: baileys_request("POST", "/pair", {"phone": digits, "userId": user_id})
     )
+
     logger.info(f"Baileys pairing result: {result}")
     if result.get("connected"):
         raise Exception("WhatsApp ইতিমধ্যে connected আছে।")
@@ -669,9 +731,6 @@ async def get_wa_pairing_code(phone: str, user_id: str) -> str:
     )
 
 async def monitor_wa_connection(uid: str, context):
-    """
-    Pairing এর পর per-user Baileys state poll করো।
-    """
     logger.info(f"🔍 Waiting for WA auth: {uid}")
     for _ in range(60):
         await asyncio.sleep(5)
@@ -700,9 +759,6 @@ async def monitor_wa_connection(uid: str, context):
             logger.warning(f"monitor_wa_connection error: {e}")
 
 async def check_wa_number(phone: str, user_id: str):
-    """
-    Baileys onWhatsApp check — per user।
-    """
     if not wa_sessions.get(user_id, {}).get("connected"):
         state = await green_get_state(user_id)
         if state != "authorized":
@@ -753,7 +809,6 @@ def mailtm_request(method: str, path: str, body=None, token=None):
         return None
 
 async def mailtm_request_async(method: str, path: str, body=None, token=None):
-    """Non-blocking wrapper — event loop block হয় না।"""
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None, lambda: mailtm_request(method, path, body, token)
@@ -960,10 +1015,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💵 Earn money from each OTP received"
         )
 
-        # If already verified, show main keyboard directly
         if sess.get("verified") or (uid in users and users[uid].get("verified")):
             await update.message.reply_text(
-                welcome + "\n\n✅ Choose an option:", 
+                welcome + "\n\n✅ Choose an option:",
                 parse_mode="Markdown", reply_markup=main_keyboard()
             )
         else:
@@ -991,7 +1045,6 @@ async def cb_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sess = get_session(uid)
         sess["verified"] = True
         sess["last_verification_check"] = time.time()
-        # Restore admin status if applicable
         if is_admin(uid):
             sess["is_admin"] = True
         if uid in users:
@@ -1036,7 +1089,6 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sess = get_session(uid)
     if not sess["is_admin"] and not is_admin(uid):
         return await update.message.reply_text("❌ Use /adminlogin [password] first.")
-    # Reset any leftover state
     sess["state"] = None
     sess["data"]  = None
     await update.message.reply_text("🛠 *Admin Dashboard*\n\nSelect an option:", parse_mode="Markdown", reply_markup=admin_keyboard())
@@ -1127,7 +1179,6 @@ async def cb_select_country(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not nums:
         return await query.answer("❌ Not enough numbers available.", show_alert=True)
 
-    # Release old numbers
     for old in sess["current_numbers"]:
         active_numbers.pop(old, None)
     await async_save_active()
@@ -1141,7 +1192,6 @@ async def cb_select_country(update: Update, context: ContextTypes.DEFAULT_TYPE):
     svc     = services.get(svc_id, {"icon": "📞", "name": svc_id})
     price   = get_otp_price(cc)
 
-    # শুধু যে ইউজার WA connect করেছে সে-ই WA check পাবে
     wa_connected = wa_sessions.get(uid, {}).get("connected", False)
     nums_text = "\n".join(
         f"{i+1}. `+{n}`" + (" ⏳" if wa_connected else "")
@@ -1169,12 +1219,10 @@ async def cb_select_country(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.edit_message_text(make_msg(nums_text), parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
 
-    # Background এ WA check করো — bot block হবে না
     if wa_connected:
         chat_id = query.message.chat_id
         msg_id  = query.message.message_id
         async def do_wa_check():
-            # সব number একসাথে parallel check করো
             results = await asyncio.gather(
                 *[check_wa_number(n, uid) for n in nums],
                 return_exceptions=True
@@ -1223,7 +1271,6 @@ async def cb_new_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     country = countries.get(cc, {"flag": "🌍", "name": cc})
     svc     = services.get(svc_id, {"icon": "📞", "name": svc_id})
     price   = get_otp_price(cc)
-    # শুধু যে ইউজার WA connect করেছে সে-ই WA check পাবে
     wa_connected = wa_sessions.get(uid, {}).get("connected", False)
 
     nums_text = "\n".join(
@@ -1256,7 +1303,6 @@ async def cb_new_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = query.message.chat_id
         msg_id  = query.message.message_id
         async def do_wa_check_new():
-            # সব number একসাথে parallel check করো
             results = await asyncio.gather(
                 *[check_wa_number(n, uid) for n in nums],
                 return_exceptions=True
@@ -1474,7 +1520,6 @@ async def cb_wa_connect(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     uid  = str(update.effective_user.id)
 
-    # যদি ইতিমধ্যে connected থাকে
     if wa_sessions.get(uid, {}).get("connected"):
         await query.edit_message_text(
             "✅ *WhatsApp Already Connected!*\n\n"
@@ -1576,7 +1621,6 @@ async def cb_tm_create(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid   = str(update.effective_user.id)
     loading = await context.bot.send_message(uid, "⏳ *Creating your email...*", parse_mode="Markdown")
 
-    # ── Background task — mail.tm API call block করবে না ──
     async def _create_task():
         try:
             new_email = await create_fresh_email()
@@ -1593,88 +1637,74 @@ async def cb_tm_create(update: Update, context: ContextTypes.DEFAULT_TYPE):
             save_temp_mails()
 
             await context.bot.edit_message_text(
-                f"✅ *New Email Created!*\n\n📧 `{new_email['address']}`\n\n📌 Use this on any website.",
+                f"✅ *Email Created!*\n\n📧 `{new_email['address']}`\n\nClick below to check inbox:",
                 chat_id=uid, message_id=loading.message_id,
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("📬 Check Inbox", callback_data="tm_inbox")],
-                    [InlineKeyboardButton("🔄 Get New Email", callback_data="tm_create")],
-                    [InlineKeyboardButton("🗑️ Delete", callback_data="tm_delete")],
+                    [InlineKeyboardButton("🗑️ Delete Email", callback_data="tm_delete")],
                 ])
             )
         except Exception as e:
-            logger.error(f"cb_tm_create task error uid={uid}: {e}")
+            logger.error(f"Email create task error: {e}")
             try:
                 await context.bot.edit_message_text(
-                    "❌ *Error occurred.* Please try again.",
-                    chat_id=uid, message_id=loading.message_id,
-                    parse_mode="Markdown"
+                    f"❌ Error: {str(e)[:100]}",
+                    chat_id=uid, message_id=loading.message_id
                 )
-            except:
-                pass
+            except: pass
 
     asyncio.create_task(_create_task())
 
 async def cb_tm_inbox(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer("📬 Loading...")
+    await query.answer("⏳ Loading...")
     uid = str(update.effective_user.id)
+    email_obj = temp_mails.get(uid)
+    if not email_obj:
+        return await query.edit_message_text("❌ No email. Create one first.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🆕 Create", callback_data="tm_create")]]))
 
-    if uid not in temp_mails:
-        return await query.edit_message_text(
-            "❌ No email found.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🆕 Create", callback_data="tm_create")]])
-        )
+    inbox = await get_email_inbox(email_obj)
+    if not inbox:
+        text = f"📬 *Inbox Empty*\n\n📧 `{email_obj['address']}`\n\nNo messages yet."
+    else:
+        text = f"📬 *Inbox* ({len(inbox)} messages)\n\n📧 `{email_obj['address']}`\n\n"
+        for i, msg in enumerate(inbox[:5]):
+            text += f"{i+1}. 📨 *{msg['subject'][:30]}*\n   From: {msg['from']}\n\n"
 
-    email_obj = temp_mails[uid]
-
-    async def _inbox_task():
-        try:
-            messages  = await get_email_inbox(email_obj)
-            now_str   = datetime.now().strftime("%I:%M:%S %p")
-            text      = f"📬 *Inbox:* `{email_obj['address']}`\n🕐 _{now_str}_\n\n"
-
-            if not messages:
-                text += "📭 *No emails yet.*"
-            else:
-                for msg in messages[:5]:
-                    text += f"━━━━━━━━━━\n📩 *From:* {msg['from']}\n📌 *Subject:* {msg['subject']}\n"
-                    body = await get_email_message(msg["id"], email_obj)
-                    if body:
-                        otp_m = re.findall(r"\b\d{4,8}\b", body)
-                        if otp_m:
-                            text += f"\n🔑 *OTP:* `{otp_m[0]}`\n"
-                        text += f"\n📝 _{body[:250]}..._\n" if len(body) > 250 else f"\n📝 _{body}_\n"
-                    text += "\n"
-
-            try:
-                await query.edit_message_text(text[:4000], parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔄 Refresh", callback_data="tm_inbox")],
-                    [InlineKeyboardButton("🔄 New Email", callback_data="tm_create")],
-                    [InlineKeyboardButton("🗑️ Delete", callback_data="tm_delete")],
-                ]))
-            except:
-                pass
-        except Exception as e:
-            logger.error(f"cb_tm_inbox task error uid={uid}: {e}")
-
-    asyncio.create_task(_inbox_task())
+    await query.edit_message_text(text, parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Refresh", callback_data="tm_inbox")],
+            [InlineKeyboardButton("📋 Show Email", callback_data="tm_show")],
+            [InlineKeyboardButton("🗑️ Delete", callback_data="tm_delete")],
+        ]))
 
 async def cb_tm_show(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     uid = str(update.effective_user.id)
-    if uid not in temp_mails:
-        return await query.answer("❌ No email found", show_alert=True)
-    addr = temp_mails[uid]["address"]
-    await query.edit_message_text(
-        f"📧 *Your Temp Email:*\n\n`{addr}`",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📬 Check Inbox", callback_data="tm_inbox")],
-            [InlineKeyboardButton("🔄 New Email", callback_data="tm_create")],
-        ])
+    email_obj = temp_mails.get(uid)
+    if not email_obj:
+        return await query.edit_message_text("❌ No email found.")
+
+    inbox = await get_email_inbox(email_obj)
+    if not inbox:
+        return await query.edit_message_text(
+            f"📭 Inbox empty.\n\n📧 `{email_obj['address']}`",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Refresh", callback_data="tm_inbox")]]))
+
+    msg = inbox[0]
+    content = await get_email_message(msg["id"], email_obj)
+    text = (
+        f"📨 *Message*\n\n"
+        f"From: `{msg['from']}`\n"
+        f"Subject: *{msg['subject']}*\n\n"
+        f"{content[:800]}"
     )
+    await query.edit_message_text(text, parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="tm_inbox")]]))
 
 async def cb_tm_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1682,15 +1712,18 @@ async def cb_tm_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     temp_mails.pop(uid, None)
     save_temp_mails()
-    await query.edit_message_text("✅ *Email deleted.*", parse_mode="Markdown")
+    await query.edit_message_text("🗑️ *Email deleted.*\n\nCreate a new one:",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🆕 Create New", callback_data="tm_create")]]))
 
-# ─── 2FA/TOTP ───
+# ─── 2FA ───
 async def handle_2fa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await ensure_verified(update, context): return
     sess = get_session(str(update.effective_user.id))
     sess["state"] = None
+
     await update.message.reply_text(
-        "🔐 *2-Step Verification Code Generator*\n\nSelect a service:",
+        "🔐 *2FA Code Generator*\n\nSelect a service:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("📘 Facebook 2FA", callback_data="totp:facebook")],
@@ -1709,7 +1742,6 @@ async def cb_totp_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sess["state"] = "totp_waiting_secret"
     sess["data"]  = {"service": svc}
 
-    # Persist totp pending service so it survives bot restart
     if uid in users:
         users[uid]["pending_totp_svc"] = svc
         await async_save_users()
@@ -1858,13 +1890,10 @@ async def cb_admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(msg) > 4000:
             msg = msg[:3950] + "..._truncated_"
 
-        try:
-            await safe_edit(query, msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔄 Refresh", callback_data="admin_users")],
-                [InlineKeyboardButton("🔙 Back", callback_data="admin_back")],
-            ]))
-        except Exception as edit_err:
-            raise
+        await safe_edit(query, msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Refresh", callback_data="admin_users")],
+            [InlineKeyboardButton("🔙 Back", callback_data="admin_back")],
+        ]))
     except Exception as e:
         logger.error(f"cb_admin_users error: {e}", exc_info=True)
         try:
@@ -2078,7 +2107,6 @@ async def cb_withdraw_reject(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if w["id"] == wid:
             w["status"] = "rejected"
             w["processedAt"] = datetime.now().isoformat()
-            # Refund
             e = get_user_earnings(w["userId"])
             e["balance"] = round(e["balance"] + w["amount"], 2)
             await async_save_earnings()
@@ -2378,7 +2406,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             wb  = openpyxl.load_workbook(io.BytesIO(bytes(raw)), read_only=True, data_only=True)
             ws  = wb.active
             for row in ws.iter_rows(min_row=2, values_only=True):
-                # Try every cell in the row for a phone number
                 for cell in row:
                     if cell is None:
                         continue
@@ -2392,7 +2419,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if num not in numbers_by_cs[cc][svc_id]:
                         numbers_by_cs[cc][svc_id].append(num)
                         added += 1
-                    break  # একটি row থেকে একটাই number নেওয়া হবে
+                    break
         except Exception as e:
             logger.error(f"XLSX parse error: {e}")
             return await update.message.reply_text(f"❌ Excel file read error: {e}")
@@ -2435,7 +2462,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid  = str(user.id)
     text = update.message.text.strip()
 
-    # Update user record
     if uid not in users:
         users[uid] = {
             "id": uid, "username": user.username or "no_username",
@@ -2446,7 +2472,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await async_save_users()
 
     sess = get_session(uid)
-    # Restore admin status from file if session was cleared (e.g. after restart)
     if not sess.get("is_admin") and is_admin(uid):
         sess["is_admin"] = True
     state = sess.get("state")
@@ -2459,8 +2484,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return await update.message.reply_text("❌ Invalid number. Example: `8801712345678`", parse_mode="Markdown")
 
         loading = await update.message.reply_text(
-            "⏳ *Pairing code নিচ্ছে...*\n\n"
-            "⌛ কয়েক সেকেন্ড অপেক্ষা করো।",
+            "⏳ *Pairing code নিচ্ছে...*\n\n⌛ কয়েক সেকেন্ড অপেক্ষা করো।",
             parse_mode="Markdown"
         )
 
@@ -2503,13 +2527,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # ── TOTP secret input ──
-    # Check both in-memory state AND persisted pending (survives bot restart)
     pending_totp_svc = users.get(uid, {}).get("pending_totp_svc")
     if state == "totp_waiting_secret" or pending_totp_svc:
         sess["state"] = None
         svc = (sess.get("data") or {}).get("service") or pending_totp_svc or "other"
 
-        # Clear persisted pending state
         if uid in users and "pending_totp_svc" in users[uid]:
             del users[uid]["pending_totp_svc"]
             await async_save_users()
@@ -2538,11 +2560,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         icon  = icons.get(svc, "🔐")
         name  = names.get(svc, svc)
 
-        # Build refresh callback (max 64 bytes for Telegram)
         secret_quoted = urllib.parse.quote(text)
         cb_data = f"totp_r:{svc}:{secret_quoted}"
         if len(cb_data.encode()) > 62:
-            # Truncate gracefully – secret too long for inline button
             cb_data = f"totp_r:{svc}:TOOLONG"
 
         try:
@@ -2567,8 +2587,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data   = sess.get("data", {})
         method = data.get("method", "bKash")
         amount = data.get("amount", 0)
-        uid_e  = uid
-        e      = get_user_earnings(uid_e)
+        e      = get_user_earnings(uid)
 
         if amount > e["balance"]:
             return await update.message.reply_text("❌ Insufficient balance!")
@@ -2769,11 +2788,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if state == "w_amount":
-        # Try to parse amount from typed text
         try:
             amount = float(text)
-            uid_e  = uid
-            e      = get_user_earnings(uid_e)
+            e      = get_user_earnings(uid)
             method = (sess.get("data") or {}).get("method", "bKash")
 
             if amount < settings["minWithdraw"]:
@@ -2937,6 +2954,9 @@ async def scheduled_membership_check(app):
 
 # ─── Main ───
 def main():
+    # ── Database initialize ──
+    db_init()
+
     app = Application.builder().token(BOT_TOKEN).concurrent_updates(True).build()
 
     # Commands
@@ -3021,7 +3041,7 @@ def main():
     app.add_handler(CallbackQueryHandler(cb_admin_cancel, pattern="^admin_cancel$"))
     app.add_handler(CallbackQueryHandler(cb_admin_logout, pattern="^admin_logout$"))
 
-    # OTP group handler — only matches messages from the OTP group chat
+    # OTP group handler
     app.add_handler(MessageHandler(filters.Chat(OTP_GROUP_ID) & ~filters.COMMAND, handle_otp_group_message))
     # Private text handler
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_text))
@@ -3034,7 +3054,7 @@ def main():
     app.post_init = post_init
 
     logger.info("="*50)
-    logger.info("🚀 Starting Earning Hub Bot (Python)...")
+    logger.info("🚀 Starting Earning Hub Bot (Python + PostgreSQL)...")
     logger.info(f"📢 Main Channel: {MAIN_CHANNEL_ID}")
     logger.info(f"💬 Chat Group: {CHAT_GROUP_ID}")
     logger.info(f"📨 OTP Group: {OTP_GROUP_ID}")
