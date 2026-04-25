@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pyotp
+from aiohttp import web as aio_web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
@@ -29,16 +30,16 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 # ─── Configuration ───
-BOT_TOKEN = "8672122739:AAGXzye3H-78dPMswDLCzMLkkoimcDCqihY"
-ADMIN_PASSWORD = "sadhin8miya61412"
+BOT_TOKEN = "8739818208:AAGc10CkvGFnfPqYukwT7mPhy3iGj7WNpGc"
+ADMIN_PASSWORD = "Earnmaster6145"
 
-MAIN_CHANNEL     = "@earning_hub_official_channel"
-MAIN_CHANNEL_URL = "https://t.me/earning_hub_official_channel"
-MAIN_CHANNEL_ID  = -1003543718769
-CHAT_GROUP       = "https://t.me/earning_hub_number_channel"
-CHAT_GROUP_ID    = -1003875142184
-OTP_GROUP        = "https://t.me/EarningHub_otp"
-OTP_GROUP_ID     = -1003247504066
+MAIN_CHANNEL     = "@+QylG3hEY19c1Y2Y0"
+MAIN_CHANNEL_URL = "https://t.me/+ejnPW9QGW9s0NDc0"
+MAIN_CHANNEL_ID  = -1001579502447
+CHAT_GROUP       = "https://t.me/+RmiAXvgxUtw3ZTU1"
+CHAT_GROUP_ID    = -1003672144557
+OTP_GROUP        = "https://t.me/earnmasterotp"
+OTP_GROUP_ID     = -1003774165897
 
 # ─── Baileys API (WhatsApp) ───
 BAILEYS_URL = os.environ.get("BAILEYS_URL", "http://localhost:3000")
@@ -103,6 +104,7 @@ earnings       = load_json(EARNINGS_FILE, {})
 withdrawals    = load_json(WITHDRAW_FILE, [])
 country_prices = load_json(COUNTRY_PRICES_FILE, {})
 wa_sessions    = {}  # { user_id: { connected: bool } }
+_tg_app        = None  # HTTP server এর জন্য global app reference
 
 countries = load_json(COUNTRIES_FILE, {
     # ── South Asia ──
@@ -535,6 +537,12 @@ def find_matching_active_number(text: str):
     return None
 
 def extract_otp(text: str):
+    # ── Step 1: Date/Timestamp pattern সরিয়ে ফেলো যাতে year ভুলে match না হয় ──
+    # e.g. "2026-04-22 20:02:23" → remove করো
+    cleaned = re.sub(r'\b(19|20)\d{2}[-/]\d{2}[-/]\d{2}(?:[T\s]\d{2}:\d{2}:\d{2})?\b', '', text)
+    # শুধু year থাকলেও বাদ দাও (e.g. "Year: 2026")
+    cleaned = re.sub(r'\b(19|20)\d{2}\b', '', cleaned)
+
     patterns = [
         # OTP Monitor Bot format: "OTP Code: 111111"
         r'OTP\s*Code[:\s]+(\d{4,8})',
@@ -547,10 +555,97 @@ def extract_otp(text: str):
         r'\b(\d{4})\b',
     ]
     for p in patterns:
-        m = re.search(p, text, re.IGNORECASE)
+        m = re.search(p, cleaned, re.IGNORECASE)
         if m and 4 <= len(m.group(1)) <= 8:
             return m.group(1)
     return None
+
+# ─── HTTP OTP Server (Bot→Bot bypass) ───
+# Telegram bot অন্য bot এর message receive করতে পারে না।
+# এই HTTP endpoint এ OTP bot সরাসরি POST করবে।
+# OTP Bot থেকে call করার format:
+#   POST http://YOUR_HOST:8080/otp
+#   Body: {"number": "79098780000", "otp": "1234", "service": "whatsapp"}
+
+# Railway নিজে PORT variable দেয়, সেটা ব্যবহার করো
+HTTP_PORT = int(os.environ.get("PORT", os.environ.get("HTTP_PORT", 8080)))
+
+async def http_otp_handler(request: aio_web.Request) -> aio_web.Response:
+    """OTP bot থেকে সরাসরি POST request receive করে user কে notify করে।"""
+    global _tg_app
+    try:
+        data      = await request.json()
+        number    = re.sub(r"\D", "", str(data.get("number", "")))
+        otp_code  = str(data.get("otp", "")).strip()
+        service   = str(data.get("service", "other")).lower().strip()
+
+        if not number:
+            return aio_web.json_response({"ok": False, "error": "number required"}, status=400)
+
+        if number not in active_numbers:
+            logger.warning(f"⚠️ HTTP /otp: number {number} not in active_numbers")
+            return aio_web.json_response({"ok": False, "error": "number not active"}, status=404)
+
+        an_data = active_numbers[number]
+        uid     = an_data["userId"]
+        cc      = an_data.get("countryCode", "")
+
+        # Duplicate check
+        otp_key = f"http_{otp_code}_{number}"
+        if an_data.get("lastOTP") == otp_key:
+            return aio_web.json_response({"ok": True, "info": "duplicate"})
+        an_data["lastOTP"]  = otp_key
+        an_data["otpCount"] = an_data.get("otpCount", 0) + 1
+        save_active()
+
+        earned  = await add_earning(uid, cc)
+        balance = get_user_earnings(uid)["balance"]
+        svc     = services.get(service, {"icon": "📱", "name": service.capitalize()})
+        country = countries.get(cc, {"flag": "🌍", "name": cc})
+
+        notify = (
+            f"📨 *OTP Received!*\n\n"
+            f"{svc['icon']} *Service:* {svc['name']}\n"
+            f"{country['flag']} *Country:* {country['name']}\n"
+            f"📞 *Number:* `+{number}`\n"
+        )
+        if otp_code:
+            notify += f"\n🔑 *OTP Code:* `{otp_code}`\n"
+        notify += f"\n💵 *+{earned:.2f} taka earned!*\n💰 *Balance: {balance:.2f} taka*"
+
+        if _tg_app:
+            try:
+                await _tg_app.bot.send_message(int(uid), notify, parse_mode="Markdown")
+            except Exception as e:
+                logger.error(f"HTTP OTP notify send error: {e}")
+
+        otp_log.append({
+            "phoneNumber": number, "userId": uid, "countryCode": cc,
+            "service": service, "otpCode": otp_code, "earned": earned,
+            "messageId": None, "delivered": True,
+            "source": "http_api",
+            "timestamp": datetime.now().isoformat()
+        })
+        save_otp_log()
+
+        logger.info(f"✅ HTTP /otp processed: +{number} otp={otp_code} uid={uid}")
+        return aio_web.json_response({"ok": True, "earned": earned, "balance": balance})
+
+    except Exception as e:
+        logger.error(f"HTTP /otp handler error: {e}")
+        return aio_web.json_response({"ok": False, "error": str(e)}, status=500)
+
+async def start_http_server():
+    """aiohttp server শুরু করো — OTP bot এর জন্য।"""
+    http_app = aio_web.Application()
+    http_app.router.add_post("/otp", http_otp_handler)
+    # Simple health check
+    http_app.router.add_get("/health", lambda r: aio_web.json_response({"ok": True}))
+    runner = aio_web.AppRunner(http_app)
+    await runner.setup()
+    site = aio_web.TCPSite(runner, "0.0.0.0", HTTP_PORT)
+    await site.start()
+    logger.info(f"🌐 HTTP OTP server started → port {HTTP_PORT}")
 
 def generate_totp(secret: str):
     try:
@@ -1784,9 +1879,9 @@ async def cb_totp_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── Support & Help ───
 async def handle_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "💬 *Support*\n\nContact admin:\n📌 @sadhin8miya",
+        "💬 *Support*\n\nContact admin:\n📌 @Asif_store_bot",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Contact", url="https://t.me/sadhin8miya")]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Contact", url="https://t.me/Asif_store_bot")]])
     )
 
 async def handle_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3028,8 +3123,11 @@ def main():
 
     # Start scheduled tasks
     async def post_init(application):
+        global _tg_app
+        _tg_app = application
         asyncio.create_task(scheduled_membership_check(application))
         asyncio.create_task(green_api_monitor(application))
+        await start_http_server()
 
     app.post_init = post_init
 
