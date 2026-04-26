@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pyotp
 from aiohttp import web as aio_web
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, CopyTextButton
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     filters, ContextTypes, ConversationHandler
@@ -1295,41 +1295,52 @@ async def cb_select_country(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"{svc['icon']} *Service:* {svc['name']}\n"
             f"{country['flag']} *Country:* {country['name']}\n"
             f"💵 *Earnings per OTP:* {price:.2f} taka\n\n"
-            f"📞 *Numbers:*\n{nt}\n\n"
             f"📌 OTP automatically আসবে।"
             + ("\n📱=WA আছে ❌=নেই" if wa_connected else "")
         )
 
-    buttons = [
-        [InlineKeyboardButton("📨 Open OTP Group", url=OTP_GROUP)],
-        [InlineKeyboardButton("🔄 Get New Numbers", callback_data=f"newnum:{svc_id}:{cc}")],
-        [InlineKeyboardButton("🔙 Service List", callback_data="back_services")],
+    # ── নম্বরগুলো সবুজ CopyText বাটন হিসেবে দেখাও ──
+    num_buttons = [
+        [InlineKeyboardButton(
+            f"⚡ 📋 +{n}",
+            copy_text=CopyTextButton(text=f"+{n}")
+        )]
+        for n in nums
+    ]
+    action_buttons = [
+        [InlineKeyboardButton("🔥 Change Number", callback_data=f"newnum:{svc_id}:{cc}")],
+        [InlineKeyboardButton("◀ Change Country", callback_data="back_services")],
+        [InlineKeyboardButton("🔑 OTP Group", url=OTP_GROUP)],
     ]
     if not wa_connected:
-        buttons.append([InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect")])
+        action_buttons.append([InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect")])
+    buttons = num_buttons + action_buttons
 
-    await query.edit_message_text(make_msg(nums_text), parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
+    await query.edit_message_text(make_msg(""), parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
 
     # Background এ WA check করো — bot block হবে না
     if wa_connected:
         chat_id = query.message.chat_id
         msg_id  = query.message.message_id
         async def do_wa_check():
-            # সব number একসাথে parallel check করো
             results = await asyncio.gather(
                 *[check_wa_number(n, uid) for n in nums],
                 return_exceptions=True
             )
             res = {n: (r if not isinstance(r, Exception) else None)
                    for n, r in zip(nums, results)}
-            updated = "\n".join(
-                f"{i+1}. `+{n}`" + (" 📱" if res.get(n) is True else (" ❌" if res.get(n) is False else " ⬜"))
-                for i, n in enumerate(nums)
-            )
+            # WA status বাটনের label এ দেখাও
+            wa_num_buttons = [
+                [InlineKeyboardButton(
+                    f"⚡ 📋 +{n}" + (" 📱" if res.get(n) is True else (" ❌" if res.get(n) is False else "")),
+                    copy_text=CopyTextButton(text=f"+{n}")
+                )]
+                for n in nums
+            ]
             try:
-                await context.bot.edit_message_text(
-                    make_msg(updated), chat_id=chat_id, message_id=msg_id,
-                    parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons)
+                await context.bot.edit_message_reply_markup(
+                    chat_id=chat_id, message_id=msg_id,
+                    reply_markup=InlineKeyboardMarkup(wa_num_buttons + action_buttons)
                 )
             except: pass
         asyncio.create_task(do_wa_check())
@@ -1378,40 +1389,49 @@ async def cb_new_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"{svc['icon']} *Service:* {svc['name']}\n"
             f"{country['flag']} *Country:* {country['name']}\n"
             f"💵 *Earnings per OTP:* {price:.2f} taka\n\n"
-            f"📞 *Numbers:*\n{nt}\n\n"
             f"📌 OTP automatically আসবে।"
             + ("\n📱=WA আছে ❌=নেই" if wa_connected else "")
         )
 
-    buttons = [
-        [InlineKeyboardButton("📨 Open OTP Group", url=OTP_GROUP)],
-        [InlineKeyboardButton("🔄 Get New Numbers", callback_data=f"newnum:{svc_id}:{cc}")],
-        [InlineKeyboardButton("🔙 Service List", callback_data="back_services")],
+    num_buttons_new = [
+        [InlineKeyboardButton(
+            f"⚡ 📋 +{n}",
+            copy_text=CopyTextButton(text=f"+{n}")
+        )]
+        for n in nums
+    ]
+    action_buttons_new = [
+        [InlineKeyboardButton("🔥 Change Number", callback_data=f"newnum:{svc_id}:{cc}")],
+        [InlineKeyboardButton("◀ Change Country", callback_data="back_services")],
+        [InlineKeyboardButton("🔑 OTP Group", url=OTP_GROUP)],
     ]
     if not wa_connected:
-        buttons.append([InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect")])
+        action_buttons_new.append([InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect")])
+    buttons = num_buttons_new + action_buttons_new
 
-    await query.edit_message_text(make_msg_new(nums_text), parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
+    await query.edit_message_text(make_msg_new(""), parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
 
     if wa_connected:
         chat_id = query.message.chat_id
         msg_id  = query.message.message_id
         async def do_wa_check_new():
-            # সব number একসাথে parallel check করো
             results = await asyncio.gather(
                 *[check_wa_number(n, uid) for n in nums],
                 return_exceptions=True
             )
             res = {n: (r if not isinstance(r, Exception) else None)
                    for n, r in zip(nums, results)}
-            updated = "\n".join(
-                f"{i+1}. `+{n}`" + (" 📱" if res.get(n) is True else (" ❌" if res.get(n) is False else " ⬜"))
-                for i, n in enumerate(nums)
-            )
+            wa_num_buttons_upd = [
+                [InlineKeyboardButton(
+                    f"⚡ 📋 +{n}" + (" 📱" if res.get(n) is True else (" ❌" if res.get(n) is False else "")),
+                    copy_text=CopyTextButton(text=f"+{n}")
+                )]
+                for n in nums
+            ]
             try:
-                await context.bot.edit_message_text(
-                    make_msg_new(updated), chat_id=chat_id, message_id=msg_id,
-                    parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons)
+                await context.bot.edit_message_reply_markup(
+                    chat_id=chat_id, message_id=msg_id,
+                    reply_markup=InlineKeyboardMarkup(wa_num_buttons_upd + action_buttons_new)
                 )
             except: pass
         asyncio.create_task(do_wa_check_new())
