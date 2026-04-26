@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 # ─── Configuration ───
-BOT_TOKEN = "8778774923:AAGN6KKbKi7dXAk6gtwQ3Y5LRIz8YgTaRn0"
+BOT_TOKEN = "8778774923:AAFeqO0wHyg0DaIRxEuJXvKRArCjyVS_z60"
 ADMIN_PASSWORD = "Earnmaster"
 
 MAIN_CHANNEL     = "@+QylG3hEY19c1Y2Y0"
