@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pyotp
 from aiohttp import web as aio_web
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo, CopyTextButton
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     filters, ContextTypes, ConversationHandler
@@ -629,7 +629,20 @@ async def http_otp_handler(request: aio_web.Request) -> aio_web.Response:
 
         if _tg_app:
             try:
-                await _tg_app.bot.send_message(int(uid), notify, parse_mode="Markdown")
+                otp_buttons = []
+                if otp_code:
+                    otp_buttons.append([InlineKeyboardButton(
+                        f"🛡 📋 {otp_code}",
+                        copy_text=CopyTextButton(text=otp_code)
+                    )])
+                otp_buttons.append([
+                    InlineKeyboardButton("📢 Channel", url=MAIN_CHANNEL_URL),
+                    InlineKeyboardButton("🤖 Number Bot", url=f"https://t.me/{(await _tg_app.bot.get_me()).username}")
+                ])
+                await _tg_app.bot.send_message(
+                    int(uid), notify, parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup(otp_buttons) if otp_buttons else None
+                )
             except Exception as e:
                 logger.error(f"HTTP OTP notify send error: {e}")
 
@@ -653,136 +666,131 @@ WEBAPP_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0">
 <title>Earning Hub</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-         background: var(--tg-theme-bg-color, #1a1a2e); color: var(--tg-theme-text-color, #fff);
-         min-height: 100vh; padding: 12px; }
-  h2 { text-align: center; margin-bottom: 16px; font-size: 18px;
-       color: var(--tg-theme-hint-color, #aaa); }
-  .grid { display: flex; flex-direction: column; gap: 10px; }
-  .btn {
-    width: 100%; padding: 14px 16px; border: none; border-radius: 12px;
-    font-size: 16px; font-weight: 600; cursor: pointer; text-align: left;
-    display: flex; align-items: center; gap: 10px; transition: opacity .15s;
-    color: #fff; box-shadow: 0 3px 8px rgba(0,0,0,.3);
-  }
-  .btn:active { opacity: .75; }
-  .btn .icon { font-size: 22px; }
-  .btn .info { display: flex; flex-direction: column; }
-  .btn .name { font-size: 15px; }
-  .btn .sub  { font-size: 12px; opacity: .85; margin-top: 2px; }
-
-  /* Service colors */
-  .c0  { background: linear-gradient(135deg,#25D366,#128C7E); }
-  .c1  { background: linear-gradient(135deg,#0088CC,#005F8E); }
-  .c2  { background: linear-gradient(135deg,#FF6B35,#E84C00); }
-  .c3  { background: linear-gradient(135deg,#9C27B0,#6A1B9A); }
-  .c4  { background: linear-gradient(135deg,#F44336,#B71C1C); }
-  .c5  { background: linear-gradient(135deg,#FF9800,#E65100); }
-  .c6  { background: linear-gradient(135deg,#2196F3,#0D47A1); }
-  .c7  { background: linear-gradient(135deg,#4CAF50,#1B5E20); }
-  .c8  { background: linear-gradient(135deg,#E91E63,#880E4F); }
-  .c9  { background: linear-gradient(135deg,#00BCD4,#006064); }
-  .c10 { background: linear-gradient(135deg,#8BC34A,#33691E); }
-  .c11 { background: linear-gradient(135deg,#FF5722,#BF360C); }
-  .c12 { background: linear-gradient(135deg,#607D8B,#263238); }
-  .c13 { background: linear-gradient(135deg,#795548,#3E2723); }
-
-  /* Number buttons */
-  .num-btn {
-    background: linear-gradient(135deg,#25D366,#128C7E);
-    width: 100%; padding: 14px 16px; border: none; border-radius: 12px;
-    font-size: 17px; font-weight: 700; cursor: pointer; color: #fff;
-    box-shadow: 0 3px 8px rgba(0,0,0,.3); letter-spacing: 1px; transition: opacity .15s;
-  }
-  .num-btn:active { opacity: .75; }
-  .action-btn {
-    width: 100%; padding: 12px; border: none; border-radius: 12px;
-    font-size: 15px; font-weight: 600; cursor: pointer; color: #fff;
-    box-shadow: 0 2px 6px rgba(0,0,0,.3); transition: opacity .15s;
-  }
-  .action-btn:active { opacity: .75; }
-  .red  { background: linear-gradient(135deg,#F44336,#B71C1C); }
-  .blue { background: linear-gradient(135deg,#2196F3,#0D47A1); }
-  .grey { background: linear-gradient(135deg,#607D8B,#37474F); }
-  .copied { background: linear-gradient(135deg,#43A047,#1B5E20) !important; }
-  .divider { height: 1px; background: rgba(255,255,255,.15); margin: 8px 0; }
-  .toast {
-    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
-    background: rgba(0,0,0,.85); color: #fff; padding: 10px 22px;
-    border-radius: 20px; font-size: 14px; display: none; z-index: 999;
-  }
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  background:#0f0f1a;color:#fff;min-height:100vh;padding:12px 10px 80px;}
+h2{text-align:center;font-size:17px;color:#aaa;margin:10px 0 16px;}
+.grid{display:flex;flex-direction:column;gap:9px;}
+.btn{width:100%;padding:14px 16px;border:none;border-radius:14px;
+  font-size:15px;font-weight:700;cursor:pointer;color:#fff;
+  display:flex;align-items:center;gap:12px;transition:transform .1s,opacity .1s;
+  box-shadow:0 4px 12px rgba(0,0,0,.4);}
+.btn:active{transform:scale(.97);opacity:.85;}
+.btn .icon{font-size:24px;min-width:28px;text-align:center;}
+.btn .info{display:flex;flex-direction:column;text-align:left;}
+.btn .name{font-size:15px;font-weight:700;}
+.btn .sub{font-size:12px;opacity:.8;margin-top:2px;}
+/* Colors */
+.green {background:linear-gradient(135deg,#25D366,#128C7E);}
+.blue  {background:linear-gradient(135deg,#2196F3,#0D47A1);}
+.red   {background:linear-gradient(135deg,#F44336,#B71C1C);}
+.orange{background:linear-gradient(135deg,#FF9800,#E65100);}
+.purple{background:linear-gradient(135deg,#9C27B0,#6A1B9A);}
+.teal  {background:linear-gradient(135deg,#009688,#00695C);}
+.pink  {background:linear-gradient(135deg,#E91E63,#880E4F);}
+.indigo{background:linear-gradient(135deg,#3F51B5,#1A237E);}
+.brown {background:linear-gradient(135deg,#795548,#3E2723);}
+.grey  {background:linear-gradient(135deg,#546E7A,#263238);}
+.yellow{background:linear-gradient(135deg,#F9A825,#E65100);}
+.lime  {background:linear-gradient(135deg,#8BC34A,#33691E);}
+.colors:nth-child(1) .btn{background:linear-gradient(135deg,#25D366,#128C7E);}
+.colors:nth-child(2) .btn{background:linear-gradient(135deg,#2196F3,#0D47A1);}
+.colors:nth-child(3) .btn{background:linear-gradient(135deg,#F44336,#B71C1C);}
+.colors:nth-child(4) .btn{background:linear-gradient(135deg,#9C27B0,#6A1B9A);}
+.colors:nth-child(5) .btn{background:linear-gradient(135deg,#FF9800,#E65100);}
+.colors:nth-child(6) .btn{background:linear-gradient(135deg,#009688,#00695C);}
+.colors:nth-child(7) .btn{background:linear-gradient(135deg,#E91E63,#880E4F);}
+.colors:nth-child(8) .btn{background:linear-gradient(135deg,#3F51B5,#1A237E);}
+.colors:nth-child(9) .btn{background:linear-gradient(135deg,#F9A825,#E65100);}
+.colors:nth-child(10) .btn{background:linear-gradient(135deg,#8BC34A,#33691E);}
+.colors:nth-child(11) .btn{background:linear-gradient(135deg,#795548,#3E2723);}
+.colors:nth-child(12) .btn{background:linear-gradient(135deg,#546E7A,#263238);}
+.num-btn{width:100%;padding:16px;border:none;border-radius:14px;
+  font-size:17px;font-weight:800;cursor:pointer;color:#fff;letter-spacing:.5px;
+  background:linear-gradient(135deg,#25D366,#128C7E);
+  box-shadow:0 4px 12px rgba(0,0,0,.4);transition:transform .1s;}
+.num-btn:active{transform:scale(.97);}
+.copied{background:linear-gradient(135deg,#43A047,#1B5E20)!important;}
+.divider{height:1px;background:rgba(255,255,255,.1);margin:6px 0;}
+.toast{position:fixed;bottom:90px;left:50%;transform:translateX(-50%);
+  background:rgba(0,0,0,.9);color:#fff;padding:10px 24px;
+  border-radius:20px;font-size:14px;display:none;z-index:999;white-space:nowrap;}
+.loading{text-align:center;padding:40px;color:#aaa;font-size:16px;}
 </style>
 </head>
 <body>
-<div id="app"><h2>⏳ Loading...</h2></div>
+<div id="app"><div class="loading">⏳ Loading...</div></div>
 <div class="toast" id="toast"></div>
-
 <script>
-const tg = window.Telegram.WebApp;
-tg.ready();
-tg.expand();
+const tg=window.Telegram.WebApp;
+tg.ready();tg.expand();
+const params=new URLSearchParams(window.location.search);
+const page=params.get('page')||'services';
 
-const params = new URLSearchParams(window.location.search);
-const page   = params.get('page') || 'services';
-const svcId  = params.get('svc')  || '';
-
-function showToast(msg) {
-  const t = document.getElementById('toast');
-  t.textContent = msg; t.style.display = 'block';
-  setTimeout(() => t.style.display = 'none', 1800);
+function showToast(msg,duration=1800){
+  const t=document.getElementById('toast');
+  t.textContent=msg;t.style.display='block';
+  setTimeout(()=>t.style.display='none',duration);
 }
 
-async function loadServices() {
-  const res  = await fetch('/api/services');
-  const data = await res.json();
-  const app  = document.getElementById('app');
-  if (!data.length) { app.innerHTML = '<h2>❌ No services available</h2>'; return; }
-  let html = '<h2>🎯 Select a Service</h2><div class="grid">';
-  data.forEach((s, i) => {
-    html += `<button class="btn c${i % 14}" onclick="selectService('${s.id}')">
-      <span class="icon">${s.icon}</span>
-      <span class="info">
-        <span class="name">${s.name}</span>
-        <span class="sub">${s.count} numbers available</span>
-      </span>
-    </button>`;
-  });
-  html += '</div>';
-  app.innerHTML = html;
+function send(data){tg.sendData(JSON.stringify(data));}
+
+const COLORS=['green','blue','red','purple','orange','teal','pink','indigo','yellow','lime','brown','grey'];
+
+async function loadServices(){
+  try{
+    const res=await fetch('/api/services');
+    const data=await res.json();
+    const app=document.getElementById('app');
+    if(!data.length){app.innerHTML='<div class="loading">❌ No services available</div>';return;}
+    let html='<h2>🎯 Select a Service</h2><div class="grid">';
+    data.forEach((s,i)=>{
+      html+=`<div class="colors" style="display:contents">
+        <button class="btn ${COLORS[i%COLORS.length]}" onclick="selectService('${s.id}')">
+          <span class="icon">${s.icon}</span>
+          <span class="info"><span class="name">${s.name}</span>
+          <span class="sub">${s.count} numbers available</span></span>
+        </button></div>`;
+    });
+    html+='</div>';
+    app.innerHTML=html;
+  }catch(e){showToast('❌ Error loading');}
 }
 
-async function selectService(svcId) {
-  const res  = await fetch('/api/countries?svc=' + svcId);
-  const data = await res.json();
-  const app  = document.getElementById('app');
-  if (!data.length) { showToast('❌ No numbers available'); return; }
-  let html = '<h2>🌍 Select a Country</h2><div class="grid">';
-  data.forEach((c, i) => {
-    html += `<button class="btn c${i % 14}" onclick="selectCountry('${svcId}','${c.code}')">
-      <span class="icon">${c.flag}</span>
-      <span class="info">
-        <span class="name">${c.name}</span>
-        <span class="sub">${c.price} taka per OTP</span>
-      </span>
-    </button>`;
-  });
-  html += `<div class="divider"></div>
-    <button class="action-btn grey" onclick="loadServices()">🔙 Back to Services</button>
-  </div>`;
-  app.innerHTML = html;
+async function selectService(svcId){
+  try{
+    const res=await fetch('/api/countries?svc='+svcId);
+    const data=await res.json();
+    if(!data.length){showToast('❌ No numbers available');return;}
+    let html='<h2>🌍 Select a Country</h2><div class="grid">';
+    data.forEach((c,i)=>{
+      html+=`<div class="colors" style="display:contents">
+        <button class="btn ${COLORS[i%COLORS.length]}" onclick="selectCountry('${svcId}','${c.code}')">
+          <span class="icon">${c.flag}</span>
+          <span class="info"><span class="name">${c.name}</span>
+          <span class="sub">${c.price} taka per OTP</span></span>
+        </button></div>`;
+    });
+    html+=`<div class="divider"></div>
+      <button class="btn grey" onclick="loadServices()">
+        <span class="icon">🔙</span>
+        <span class="info"><span class="name">Back to Services</span></span>
+      </button></div>`;
+    document.getElementById('app').innerHTML=html;
+  }catch(e){showToast('❌ Error loading');}
 }
 
-function selectCountry(svcId, cc) {
-  tg.sendData(JSON.stringify({action:'select', svc:svcId, cc:cc}));
+function selectCountry(svcId,cc){
+  showToast('⏳ Getting numbers...',2000);
+  send({action:'select',svc:svcId,cc:cc});
 }
 
 // Init
-loadServices();
+if(page==='services')loadServices();
 </script>
 </body>
 </html>"""
@@ -1343,26 +1351,34 @@ async def handle_get_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE)
     sess = get_session(str(update.effective_user.id))
     sess["state"] = None
 
-    base_url = "https://number-bot-production-51e7.up.railway.app"
-    webapp_url = base_url.rstrip("/") + "/app"
-
     avail = []
     for svc_id, svc in services.items():
         ccs = get_available_countries_for_service(svc_id)
         if ccs:
-            avail.append(svc_id)
+            total = sum(len(numbers_by_cs.get(cc, {}).get(svc_id, [])) for cc in ccs)
+            avail.append((svc_id, svc, total))
 
     if not avail:
         return await update.message.reply_text("📭 *No Numbers Available*\n\nPlease try again later.", parse_mode="Markdown")
 
+    buttons = []
+    for i in range(0, len(avail), 2):
+        row = []
+        row.append(InlineKeyboardButton(
+            f"{avail[i][1]['icon']} {avail[i][1]['name']} ({avail[i][2]})",
+            callback_data=f"svc:{avail[i][0]}"
+        ))
+        if i+1 < len(avail):
+            row.append(InlineKeyboardButton(
+                f"{avail[i+1][1]['icon']} {avail[i+1][1]['name']} ({avail[i+1][2]})",
+                callback_data=f"svc:{avail[i+1][0]}"
+            ))
+        buttons.append(row)
+
     await update.message.reply_text(
-        "🎯 *নিচের বাটনে চাপো — Service ও Country সিলেক্ট করো:*",
+        "🎯 *Select a Service*\n\n_(number in brackets = available count)_",
         parse_mode="Markdown",
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton("🌐 নম্বর নাও", web_app=WebAppInfo(url=webapp_url))]],
-            resize_keyboard=True,
-            one_time_keyboard=True
-        )
+        reply_markup=InlineKeyboardMarkup(buttons)
     )
 
 async def cb_select_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1445,18 +1461,15 @@ async def cb_select_country(update: Update, context: ContextTypes.DEFAULT_TYPE):
             + ("\n📱=WA আছে ❌=নেই" if wa_connected else "")
         )
 
-    # ── নম্বরগুলো সবুজ CopyText বাটন হিসেবে দেখাও ──
+    # ── নম্বরগুলো সবুজ CopyTextButton হিসেবে দেখাও ──
     num_buttons = [
-        [InlineKeyboardButton(
-            f"⚡ 📋 +{n}",
-            callback_data=f"num:{n}"
-        )]
+        [InlineKeyboardButton(f"⚡ +{n}", copy_text=CopyTextButton(text=f"+{n}"))]
         for n in nums
     ]
     action_buttons = [
-        [InlineKeyboardButton("🔥 Change Number", callback_data=f"newnum:{svc_id}:{cc}")],
-        [InlineKeyboardButton("◀ Change Country", callback_data="back_services")],
-        [InlineKeyboardButton("🔑 OTP Group", url=OTP_GROUP)],
+        [InlineKeyboardButton("🔄 Get New Numbers", callback_data=f"newnum:{svc_id}:{cc}")],
+        [InlineKeyboardButton("🔙 Service List", callback_data="back_services")],
+        [InlineKeyboardButton("📨 Open OTP Group", url=OTP_GROUP)],
     ]
     if not wa_connected:
         action_buttons.append([InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect")])
@@ -1540,16 +1553,13 @@ async def cb_new_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     num_buttons_new = [
-        [InlineKeyboardButton(
-            f"⚡ 📋 +{n}",
-            callback_data=f"num:{n}"
-        )]
+        [InlineKeyboardButton(f"⚡ +{n}", copy_text=CopyTextButton(text=f"+{n}"))]
         for n in nums
     ]
     action_buttons_new = [
-        [InlineKeyboardButton("🔥 Change Number", callback_data=f"newnum:{svc_id}:{cc}")],
-        [InlineKeyboardButton("◀ Change Country", callback_data="back_services")],
-        [InlineKeyboardButton("🔑 OTP Group", url=OTP_GROUP)],
+        [InlineKeyboardButton("🔄 Get New Numbers", callback_data=f"newnum:{svc_id}:{cc}")],
+        [InlineKeyboardButton("🔙 Service List", callback_data="back_services")],
+        [InlineKeyboardButton("📨 Open OTP Group", url=OTP_GROUP)],
     ]
     if not wa_connected:
         action_buttons_new.append([InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect")])
@@ -3340,7 +3350,20 @@ async def handle_otp_group_message(update: Update, context: ContextTypes.DEFAULT
     notify += f"\n💵 *+{earned:.2f} taka earned!*\n💰 *Balance: {balance:.2f} taka*"
 
     try:
-        await context.bot.send_message(uid, notify, parse_mode="Markdown")
+        otp_buttons = []
+        if otp_code:
+            otp_buttons.append([InlineKeyboardButton(
+                f"🛡 📋 {otp_code}",
+                copy_text=CopyTextButton(text=otp_code)
+            )])
+        otp_buttons.append([
+            InlineKeyboardButton("📢 Channel", url=MAIN_CHANNEL_URL),
+            InlineKeyboardButton("🤖 Number Bot", url=f"https://t.me/{(await context.bot.get_me()).username}")
+        ])
+        await context.bot.send_message(
+            uid, notify, parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(otp_buttons)
+        )
         await context.bot.forward_message(uid, OTP_GROUP_ID, msg_id)
     except Exception as e:
         logger.error(f"OTP notify error: {e}")
