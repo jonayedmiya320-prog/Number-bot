@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pyotp
 from aiohttp import web as aio_web
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, CopyTextButton
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     filters, ContextTypes, ConversationHandler
@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 # ─── Configuration ───
-BOT_TOKEN = "8778774923:AAFeqO0wHyg0DaIRxEuJXvKRArCjyVS_z60"
+BOT_TOKEN = "8778774923:AAGN6KKbKi7dXAk6gtwQ3Y5LRIz8YgTaRn0"
 ADMIN_PASSWORD = "Earnmaster"
 
 MAIN_CHANNEL     = "@+QylG3hEY19c1Y2Y0"
@@ -38,7 +38,7 @@ MAIN_CHANNEL_URL = "https://t.me/+ejnPW9QGW9s0NDc0"
 MAIN_CHANNEL_ID  = -1001579502447
 CHAT_GROUP       = "https://t.me/+RmiAXvgxUtw3ZTU1"
 CHAT_GROUP_ID    = -1003672144557
-OTP_GROUP        = "https://t.me/earnmasterotp"
+OTP_GROUP        = "https://t.me/+_LAWl3HB98NmZTRl"
 OTP_GROUP_ID     = -1003774165897
 
 # ─── Baileys API (WhatsApp) ───
@@ -72,8 +72,7 @@ DEFAULT_SETTINGS = {
     "minWithdraw": 50,
     "defaultOtpPrice": 0.25,
     "withdrawMethods": ["bKash", "Nagad"],
-    "withdrawEnabled": True,
-    "referralCommission": 10  # রেফারেলে কত % কমিশন পাবে
+    "withdrawEnabled": True
 }
 
 # ─── Load/Save Helpers ───
@@ -447,19 +446,6 @@ async def add_earning(uid: str, cc: str) -> float:
     e["balance"]      = round(e["balance"] + price, 2)
     e["totalEarned"]  = round(e["totalEarned"] + price, 2)
     e["otpCount"]     = e.get("otpCount", 0) + 1
-
-    # ── Referral Commission ──
-    referrer_uid = users.get(uid, {}).get("referredBy")
-    if referrer_uid and referrer_uid != uid:
-        commission_pct = settings.get("referralCommission", 10)
-        commission     = round(price * commission_pct / 100, 4)
-        if commission > 0:
-            re_ = get_user_earnings(referrer_uid)
-            re_["balance"]     = round(re_["balance"] + commission, 2)
-            re_["totalEarned"] = round(re_["totalEarned"] + commission, 2)
-            re_["refEarned"]   = round(re_.get("refEarned", 0) + commission, 4)
-            logger.info(f"🤝 Referral commission: {commission:.4f} taka → uid={referrer_uid} from uid={uid}")
-
     await async_save_earnings()
     return price
 
@@ -581,8 +567,7 @@ def extract_otp(text: str):
 #   POST http://YOUR_HOST:8080/otp
 #   Body: {"number": "79098780000", "otp": "1234", "service": "whatsapp"}
 
-# Railway নিজে PORT variable দেয়, সেটা ব্যবহার করো
-HTTP_PORT = int(os.environ.get("PORT", os.environ.get("HTTP_PORT", 8080)))
+HTTP_PORT = int(os.environ.get("HTTP_PORT", 8080))
 
 async def http_otp_handler(request: aio_web.Request) -> aio_web.Response:
     """OTP bot থেকে সরাসরি POST request receive করে user কে notify করে।"""
@@ -957,34 +942,33 @@ def main_keyboard():
         ["☎️ Get Number", "📧 Get Tempmail"],
         ["🔐 2FA", "💰 Balances"],
         ["💸 Withdraw", "💬 Support"],
-        ["👥 Refer & Earn"],
+        ["ℹ️ Help"]
     ], resize_keyboard=True)
 
 def verify_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("1️⃣ 🔴 Main Channel", url=MAIN_CHANNEL_URL)],
-        [InlineKeyboardButton("2️⃣ 🟠 Number Channel", url=CHAT_GROUP)],
-        [InlineKeyboardButton("3️⃣ 🟡 OTP Group", url=OTP_GROUP)],
-        [InlineKeyboardButton("🟢 ✅ VERIFY MEMBERSHIP", callback_data="verify_user")],
+        [InlineKeyboardButton("1️⃣ 📢 Main Channel", url=MAIN_CHANNEL_URL)],
+        [InlineKeyboardButton("2️⃣ 💬 Number Channel", url=CHAT_GROUP)],
+        [InlineKeyboardButton("3️⃣ 📨 OTP Group", url=OTP_GROUP)],
+        [InlineKeyboardButton("✅ VERIFY MEMBERSHIP", callback_data="verify_user")],
     ])
 
 def admin_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🟦 📊 Stock Report", callback_data="admin_stock"),
-         InlineKeyboardButton("🟩 👥 User Stats", callback_data="admin_users")],
-        [InlineKeyboardButton("🟧 📢 Broadcast", callback_data="admin_broadcast"),
-         InlineKeyboardButton("🟨 📋 OTP Log", callback_data="admin_otp_log")],
-        [InlineKeyboardButton("🟩 ➕ Add Numbers", callback_data="admin_add_numbers"),
-         InlineKeyboardButton("🟦 📤 Upload File", callback_data="admin_upload")],
-        [InlineKeyboardButton("🟥 🗑️ Delete Numbers", callback_data="admin_delete"),
-         InlineKeyboardButton("🟧 🔧 Manage Services", callback_data="admin_manage_services")],
-        [InlineKeyboardButton("🟨 🌍 Manage Countries", callback_data="admin_manage_countries"),
-         InlineKeyboardButton("🟦 ⚙️ Settings", callback_data="admin_settings")],
-        [InlineKeyboardButton("🟩 💰 Country Prices", callback_data="admin_country_prices"),
-         InlineKeyboardButton("🟧 💸 Withdrawals", callback_data="admin_withdrawals")],
-        [InlineKeyboardButton("🟨 👛 Balance Management", callback_data="admin_balance_manage"),
-         InlineKeyboardButton("🟪 🤝 Referral Commission", callback_data="admin_referral_commission")],
-        [InlineKeyboardButton("🟥 🚪 Logout", callback_data="admin_logout")],
+        [InlineKeyboardButton("📊 Stock Report", callback_data="admin_stock"),
+         InlineKeyboardButton("👥 User Stats", callback_data="admin_users")],
+        [InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast"),
+         InlineKeyboardButton("📋 OTP Log", callback_data="admin_otp_log")],
+        [InlineKeyboardButton("➕ Add Numbers", callback_data="admin_add_numbers"),
+         InlineKeyboardButton("📤 Upload File", callback_data="admin_upload")],
+        [InlineKeyboardButton("🗑️ Delete Numbers", callback_data="admin_delete"),
+         InlineKeyboardButton("🔧 Manage Services", callback_data="admin_manage_services")],
+        [InlineKeyboardButton("🌍 Manage Countries", callback_data="admin_manage_countries"),
+         InlineKeyboardButton("⚙️ Settings", callback_data="admin_settings")],
+        [InlineKeyboardButton("💰 Country Prices", callback_data="admin_country_prices"),
+         InlineKeyboardButton("💸 Withdrawals", callback_data="admin_withdrawals")],
+        [InlineKeyboardButton("👛 Balance Management", callback_data="admin_balance_manage")],
+        [InlineKeyboardButton("🚪 Logout", callback_data="admin_logout")],
     ])
 
 # ─── User Session State ───
@@ -1049,8 +1033,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         uid  = str(user.id)
 
-        is_new_user = uid not in users
-        if is_new_user:
+        if uid not in users:
             users[uid] = {
                 "id": uid, "username": user.username or "no_username",
                 "first_name": user.first_name or "User",
@@ -1058,32 +1041,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "joined": datetime.now().isoformat(),
                 "last_active": datetime.now().isoformat(),
                 "verified": False,
-                "referredBy": None,
-                "referrals": 0,
             }
-
-        # ── Referral deep link: /start ref_USERID ──
-        if context.args and is_new_user:
-            arg = context.args[0]
-            if arg.startswith("ref_"):
-                ref_uid = arg[4:]
-                if ref_uid != uid and ref_uid in users:
-                    users[uid]["referredBy"] = ref_uid
-                    users[ref_uid]["referrals"] = users[ref_uid].get("referrals", 0) + 1
-                    logger.info(f"🤝 New referral: uid={uid} referred by uid={ref_uid}")
-                    try:
-                        commission_pct = settings.get("referralCommission", 10)
-                        await context.bot.send_message(
-                            int(ref_uid),
-                            f"🎉 *নতুন রেফারেল!*\n\n"
-                            f"👤 *{user.first_name}* তোমার লিংক দিয়ে join করেছে!\n"
-                            f"💰 সে OTP পেলে তুমি *{commission_pct}%* কমিশন পাবে।",
-                            parse_mode="Markdown"
-                        )
-                    except:
-                        pass
-
-        await async_save_users()
+            await async_save_users()
 
         sess = get_session(uid)
         sess["state"] = None
@@ -1095,9 +1054,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💵 Earn money from each OTP received"
         )
 
+        # If already verified, show main keyboard directly
         if sess.get("verified") or (uid in users and users[uid].get("verified")):
             await update.message.reply_text(
-                welcome + "\n\n✅ Choose an option:",
+                welcome + "\n\n✅ Choose an option:", 
                 parse_mode="Markdown", reply_markup=main_keyboard()
             )
         else:
@@ -1193,18 +1153,15 @@ async def handle_get_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return await update.message.reply_text("📭 *No Numbers Available*\n\nPlease try again later.", parse_mode="Markdown")
 
     buttons = []
-    SVC_COLORS = ["🔴", "🟠", "🟡", "🟢", "🔵", "🟣", "🟤", "⚪", "🟦", "🟩", "🟧", "🟨", "🟥", "🟪"]
     for i in range(0, len(avail), 2):
         row = []
-        col1 = SVC_COLORS[i % len(SVC_COLORS)]
         row.append(InlineKeyboardButton(
-            f"{col1} {avail[i][1]['icon']} {avail[i][1]['name']} ({avail[i][2]})",
+            f"{avail[i][1]['icon']} {avail[i][1]['name']} ({avail[i][2]})",
             callback_data=f"svc:{avail[i][0]}"
         ))
         if i+1 < len(avail):
-            col2 = SVC_COLORS[(i+1) % len(SVC_COLORS)]
             row.append(InlineKeyboardButton(
-                f"{col2} {avail[i+1][1]['icon']} {avail[i+1][1]['name']} ({avail[i+1][2]})",
+                f"{avail[i+1][1]['icon']} {avail[i+1][1]['name']} ({avail[i+1][2]})",
                 callback_data=f"svc:{avail[i+1][0]}"
             ))
         buttons.append(row)
@@ -1228,17 +1185,13 @@ async def cb_select_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await query.answer("❌ No numbers available", show_alert=True)
 
     buttons = []
-    # প্রতিটা country বাটনে আলাদা কালার
-    COLORS = ["🔴", "🟠", "🟡", "🟢", "🔵", "🟣", "🟤", "⚪", "🟦", "🟩", "🟧", "🟨", "🟥", "🟪"]
     for i in range(0, len(ccs), 2):
         row = []
         cc1 = ccs[i]; c1 = countries[cc1]; p1 = get_otp_price(cc1)
-        col1 = COLORS[i % len(COLORS)]
-        row.append(InlineKeyboardButton(f"{col1} {c1['flag']} {c1['name']} ({p1:.2f}TK)", callback_data=f"cc:{svc_id}:{cc1}"))
+        row.append(InlineKeyboardButton(f"{c1['flag']} {c1['name']} ({p1:.2f}TK)", callback_data=f"cc:{svc_id}:{cc1}"))
         if i+1 < len(ccs):
             cc2 = ccs[i+1]; c2 = countries[cc2]; p2 = get_otp_price(cc2)
-            col2 = COLORS[(i+1) % len(COLORS)]
-            row.append(InlineKeyboardButton(f"{col2} {c2['flag']} {c2['name']} ({p2:.2f}TK)", callback_data=f"cc:{svc_id}:{cc2}"))
+            row.append(InlineKeyboardButton(f"{c2['flag']} {c2['name']} ({p2:.2f}TK)", callback_data=f"cc:{svc_id}:{cc2}"))
         buttons.append(row)
     buttons.append([InlineKeyboardButton("🔙 Back", callback_data="back_services")])
 
@@ -1295,52 +1248,41 @@ async def cb_select_country(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"{svc['icon']} *Service:* {svc['name']}\n"
             f"{country['flag']} *Country:* {country['name']}\n"
             f"💵 *Earnings per OTP:* {price:.2f} taka\n\n"
+            f"📞 *Numbers:*\n{nt}\n\n"
             f"📌 OTP automatically আসবে।"
             + ("\n📱=WA আছে ❌=নেই" if wa_connected else "")
         )
 
-    # ── নম্বরগুলো সবুজ CopyText বাটন হিসেবে দেখাও ──
-    num_buttons = [
-        [InlineKeyboardButton(
-            f"⚡ 📋 +{n}",
-            copy_text=CopyTextButton(text=f"+{n}")
-        )]
-        for n in nums
-    ]
-    action_buttons = [
-        [InlineKeyboardButton("🔥 Change Number", callback_data=f"newnum:{svc_id}:{cc}")],
-        [InlineKeyboardButton("◀ Change Country", callback_data="back_services")],
-        [InlineKeyboardButton("🔑 OTP Group", url=OTP_GROUP)],
+    buttons = [
+        [InlineKeyboardButton("📨 Open OTP Group", url=OTP_GROUP)],
+        [InlineKeyboardButton("🔄 Get New Numbers", callback_data=f"newnum:{svc_id}:{cc}")],
+        [InlineKeyboardButton("🔙 Service List", callback_data="back_services")],
     ]
     if not wa_connected:
-        action_buttons.append([InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect")])
-    buttons = num_buttons + action_buttons
+        buttons.append([InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect")])
 
-    await query.edit_message_text(make_msg(""), parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
+    await query.edit_message_text(make_msg(nums_text), parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
 
     # Background এ WA check করো — bot block হবে না
     if wa_connected:
         chat_id = query.message.chat_id
         msg_id  = query.message.message_id
         async def do_wa_check():
+            # সব number একসাথে parallel check করো
             results = await asyncio.gather(
                 *[check_wa_number(n, uid) for n in nums],
                 return_exceptions=True
             )
             res = {n: (r if not isinstance(r, Exception) else None)
                    for n, r in zip(nums, results)}
-            # WA status বাটনের label এ দেখাও
-            wa_num_buttons = [
-                [InlineKeyboardButton(
-                    f"⚡ 📋 +{n}" + (" 📱" if res.get(n) is True else (" ❌" if res.get(n) is False else "")),
-                    copy_text=CopyTextButton(text=f"+{n}")
-                )]
-                for n in nums
-            ]
+            updated = "\n".join(
+                f"{i+1}. `+{n}`" + (" 📱" if res.get(n) is True else (" ❌" if res.get(n) is False else " ⬜"))
+                for i, n in enumerate(nums)
+            )
             try:
-                await context.bot.edit_message_reply_markup(
-                    chat_id=chat_id, message_id=msg_id,
-                    reply_markup=InlineKeyboardMarkup(wa_num_buttons + action_buttons)
+                await context.bot.edit_message_text(
+                    make_msg(updated), chat_id=chat_id, message_id=msg_id,
+                    parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons)
                 )
             except: pass
         asyncio.create_task(do_wa_check())
@@ -1389,49 +1331,40 @@ async def cb_new_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"{svc['icon']} *Service:* {svc['name']}\n"
             f"{country['flag']} *Country:* {country['name']}\n"
             f"💵 *Earnings per OTP:* {price:.2f} taka\n\n"
+            f"📞 *Numbers:*\n{nt}\n\n"
             f"📌 OTP automatically আসবে।"
             + ("\n📱=WA আছে ❌=নেই" if wa_connected else "")
         )
 
-    num_buttons_new = [
-        [InlineKeyboardButton(
-            f"⚡ 📋 +{n}",
-            copy_text=CopyTextButton(text=f"+{n}")
-        )]
-        for n in nums
-    ]
-    action_buttons_new = [
-        [InlineKeyboardButton("🔥 Change Number", callback_data=f"newnum:{svc_id}:{cc}")],
-        [InlineKeyboardButton("◀ Change Country", callback_data="back_services")],
-        [InlineKeyboardButton("🔑 OTP Group", url=OTP_GROUP)],
+    buttons = [
+        [InlineKeyboardButton("📨 Open OTP Group", url=OTP_GROUP)],
+        [InlineKeyboardButton("🔄 Get New Numbers", callback_data=f"newnum:{svc_id}:{cc}")],
+        [InlineKeyboardButton("🔙 Service List", callback_data="back_services")],
     ]
     if not wa_connected:
-        action_buttons_new.append([InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect")])
-    buttons = num_buttons_new + action_buttons_new
+        buttons.append([InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect")])
 
-    await query.edit_message_text(make_msg_new(""), parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
+    await query.edit_message_text(make_msg_new(nums_text), parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
 
     if wa_connected:
         chat_id = query.message.chat_id
         msg_id  = query.message.message_id
         async def do_wa_check_new():
+            # সব number একসাথে parallel check করো
             results = await asyncio.gather(
                 *[check_wa_number(n, uid) for n in nums],
                 return_exceptions=True
             )
             res = {n: (r if not isinstance(r, Exception) else None)
                    for n, r in zip(nums, results)}
-            wa_num_buttons_upd = [
-                [InlineKeyboardButton(
-                    f"⚡ 📋 +{n}" + (" 📱" if res.get(n) is True else (" ❌" if res.get(n) is False else "")),
-                    copy_text=CopyTextButton(text=f"+{n}")
-                )]
-                for n in nums
-            ]
+            updated = "\n".join(
+                f"{i+1}. `+{n}`" + (" 📱" if res.get(n) is True else (" ❌" if res.get(n) is False else " ⬜"))
+                for i, n in enumerate(nums)
+            )
             try:
-                await context.bot.edit_message_reply_markup(
-                    chat_id=chat_id, message_id=msg_id,
-                    reply_markup=InlineKeyboardMarkup(wa_num_buttons_upd + action_buttons_new)
+                await context.bot.edit_message_text(
+                    make_msg_new(updated), chat_id=chat_id, message_id=msg_id,
+                    parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons)
                 )
             except: pass
         asyncio.create_task(do_wa_check_new())
@@ -1447,18 +1380,15 @@ async def cb_back_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
             avail.append((svc_id, svc, total))
 
     buttons = []
-    SVC_COLORS = ["🔴", "🟠", "🟡", "🟢", "🔵", "🟣", "🟤", "⚪", "🟦", "🟩", "🟧", "🟨", "🟥", "🟪"]
     for i in range(0, len(avail), 2):
         row = []
-        col1 = SVC_COLORS[i % len(SVC_COLORS)]
         row.append(InlineKeyboardButton(
-            f"{col1} {avail[i][1]['icon']} {avail[i][1]['name']} ({avail[i][2]})",
+            f"{avail[i][1]['icon']} {avail[i][1]['name']} ({avail[i][2]})",
             callback_data=f"svc:{avail[i][0]}"
         ))
         if i+1 < len(avail):
-            col2 = SVC_COLORS[(i+1) % len(SVC_COLORS)]
             row.append(InlineKeyboardButton(
-                f"{col2} {avail[i+1][1]['icon']} {avail[i+1][1]['name']} ({avail[i+1][2]})",
+                f"{avail[i+1][1]['icon']} {avail[i+1][1]['name']} ({avail[i+1][2]})",
                 callback_data=f"svc:{avail[i+1][0]}"
             ))
         buttons.append(row)
@@ -2932,20 +2862,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Format: `[id] [name] [icon]`", parse_mode="Markdown")
         return
 
-    if state == "admin_set_commission" and (sess["is_admin"] or is_admin(uid)):
-        sess["state"] = None
-        try:
-            val = float(text)
-            if 0 <= val <= 100:
-                settings["referralCommission"] = val
-                save_settings()
-                await update.message.reply_text(f"✅ *Referral commission set to {val}%*", parse_mode="Markdown")
-            else:
-                await update.message.reply_text("❌ 0-100 এর মধ্যে দাও।")
-        except:
-            await update.message.reply_text("❌ Invalid value.")
-        return
-
     if state == "w_amount":
         # Try to parse amount from typed text
         try:
@@ -3012,80 +2928,7 @@ async def cb_withdraw_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE
         parse_mode="Markdown"
     )
 
-# ─── Refer & Earn ───
-async def handle_refer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await ensure_verified(update, context):
-        return
-    user = update.effective_user
-    uid  = str(user.id)
-
-    bot_username = (await context.bot.get_me()).username
-    ref_link     = f"https://t.me/{bot_username}?start=ref_{uid}"
-    commission   = settings.get("referralCommission", 10)
-
-    user_data    = users.get(uid, {})
-    total_refs   = user_data.get("referrals", 0)
-    ref_earned   = get_user_earnings(uid).get("refEarned", 0)
-
-    text = (
-        f"👥 *Refer & Earn*\n\n"
-        f"🔗 তোমার রেফারেল লিংক:\n`{ref_link}`\n\n"
-        f"💰 প্রতিটি রেফারেলের OTP থেকে তুমি *{commission}%* কমিশন পাবে\n\n"
-        f"📊 *তোমার রেফারেল Statistics:*\n"
-        f"👤 মোট রেফারেল: *{total_refs}* জন\n"
-        f"💵 রেফারেল থেকে মোট আয়: *{ref_earned:.2f} taka*\n\n"
-        f"📌 *কীভাবে কাজ করে:*\n"
-        f"১. উপরের লিংক বন্ধুকে পাঠাও\n"
-        f"২. সে bot এ join করুক\n"
-        f"৩. সে OTP পেলে তুমি {commission}% পাবে — সারাজীবন! 🎉"
-    )
-    await update.message.reply_text(
-        text,
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📤 লিংক Share করো", switch_inline_query=ref_link)],
-        ])
-    )
-
-# ─── Admin Referral Commission ───
-async def cb_admin_referral_commission(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    uid   = str(update.effective_user.id)
-    if not get_session(uid)["is_admin"] and not is_admin(uid):
-        return await query.answer("❌ Admin only")
-    await query.answer()
-    current = settings.get("referralCommission", 10)
-    get_session(uid)["state"] = "admin_set_commission"
-    await query.edit_message_text(
-        f"🤝 *Referral Commission*\n\n"
-        f"বর্তমান কমিশন: *{current}%*\n\n"
-        f"নতুন % পাঠাও (যেমন: `5` বা `15`):\n"
-        f"_0 দিলে রেফারেল বন্ধ হবে_",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("5%", callback_data="setcom:5"),
-             InlineKeyboardButton("10%", callback_data="setcom:10"),
-             InlineKeyboardButton("15%", callback_data="setcom:15"),
-             InlineKeyboardButton("20%", callback_data="setcom:20")],
-            [InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel")],
-        ])
-    )
-
-async def cb_setcom(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    uid   = str(update.effective_user.id)
-    if not get_session(uid)["is_admin"] and not is_admin(uid):
-        return await query.answer("❌ Admin only")
-    val = int(query.data.split(":")[1])
-    settings["referralCommission"] = val
-    save_settings()
-    get_session(uid)["state"] = None
-    await query.answer(f"✅ Commission set to {val}%")
-    await query.edit_message_text(
-        f"✅ *Referral Commission updated!*\n\nনতুন কমিশন: *{val}%*",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_back")]])
-    )
+# ─── OTP Group Message Handler ───
 async def handle_otp_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return
@@ -3203,7 +3046,7 @@ def main():
     app.add_handler(MessageHandler(filters.Regex("^💰 Balances$"), handle_balance))
     app.add_handler(MessageHandler(filters.Regex("^💸 Withdraw$"), handle_withdraw))
     app.add_handler(MessageHandler(filters.Regex("^💬 Support$"), handle_support))
-    app.add_handler(MessageHandler(filters.Regex("^👥 Refer"), handle_refer))
+    app.add_handler(MessageHandler(filters.Regex("^ℹ️ Help$"), handle_help))
 
     # Document handler
     app.add_handler(MessageHandler(filters.Document.ALL & filters.ChatType.PRIVATE, handle_document))
@@ -3271,8 +3114,6 @@ def main():
     app.add_handler(CallbackQueryHandler(cb_admin_back, pattern="^admin_back$"))
     app.add_handler(CallbackQueryHandler(cb_admin_cancel, pattern="^admin_cancel$"))
     app.add_handler(CallbackQueryHandler(cb_admin_logout, pattern="^admin_logout$"))
-    app.add_handler(CallbackQueryHandler(cb_admin_referral_commission, pattern="^admin_referral_commission$"))
-    app.add_handler(CallbackQueryHandler(cb_setcom, pattern="^setcom:"))
 
     # OTP group handler — only matches messages from the OTP group chat
     app.add_handler(MessageHandler(filters.Chat(OTP_GROUP_ID) & ~filters.COMMAND, handle_otp_group_message))
