@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pyotp
 from aiohttp import web as aio_web
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, WebAppInfo
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     filters, ContextTypes, ConversationHandler
@@ -1356,11 +1356,13 @@ async def handle_get_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return await update.message.reply_text("📭 *No Numbers Available*\n\nPlease try again later.", parse_mode="Markdown")
 
     await update.message.reply_text(
-        "🎯 *Select a Service & Country*\n\nনিচের বাটনে চাপো:",
+        "🎯 *নিচের বাটনে চাপো — Service ও Country সিলেক্ট করো:*",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🌐 Choose Number", web_app=WebAppInfo(url=webapp_url))]
-        ])
+        reply_markup=ReplyKeyboardMarkup(
+            [[KeyboardButton("🌐 নম্বর নাও", web_app=WebAppInfo(url=webapp_url))]],
+            resize_keyboard=True,
+            one_time_keyboard=True
+        )
     )
 
 async def cb_select_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
