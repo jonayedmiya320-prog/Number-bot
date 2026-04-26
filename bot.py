@@ -1123,29 +1123,29 @@ def main_keyboard():
 
 def verify_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("1️⃣ 🔴 Main Channel", url=MAIN_CHANNEL_URL)],
-        [InlineKeyboardButton("2️⃣ 🟠 Number Channel", url=CHAT_GROUP)],
-        [InlineKeyboardButton("3️⃣ 🟡 OTP Group", url=OTP_GROUP)],
-        [InlineKeyboardButton("🟢 ✅ VERIFY MEMBERSHIP", callback_data="verify_user")],
+        [InlineKeyboardButton("1️⃣ Main Channel", url=MAIN_CHANNEL_URL)],
+        [InlineKeyboardButton("2️⃣ Number Channel", url=CHAT_GROUP)],
+        [InlineKeyboardButton("3️⃣ OTP Group", url=OTP_GROUP)],
+        [InlineKeyboardButton("✅ VERIFY MEMBERSHIP", callback_data="verify_user")],
     ])
 
 def admin_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🟦 📊 Stock Report", callback_data="admin_stock"),
-         InlineKeyboardButton("🟩 👥 User Stats", callback_data="admin_users")],
-        [InlineKeyboardButton("🟧 📢 Broadcast", callback_data="admin_broadcast"),
-         InlineKeyboardButton("🟨 📋 OTP Log", callback_data="admin_otp_log")],
-        [InlineKeyboardButton("🟩 ➕ Add Numbers", callback_data="admin_add_numbers"),
-         InlineKeyboardButton("🟦 📤 Upload File", callback_data="admin_upload")],
-        [InlineKeyboardButton("🟥 🗑️ Delete Numbers", callback_data="admin_delete"),
-         InlineKeyboardButton("🟧 🔧 Manage Services", callback_data="admin_manage_services")],
-        [InlineKeyboardButton("🟨 🌍 Manage Countries", callback_data="admin_manage_countries"),
-         InlineKeyboardButton("🟦 ⚙️ Settings", callback_data="admin_settings")],
-        [InlineKeyboardButton("🟩 💰 Country Prices", callback_data="admin_country_prices"),
-         InlineKeyboardButton("🟧 💸 Withdrawals", callback_data="admin_withdrawals")],
-        [InlineKeyboardButton("🟨 👛 Balance Management", callback_data="admin_balance_manage"),
-         InlineKeyboardButton("🟪 🤝 Referral Commission", callback_data="admin_referral_commission")],
-        [InlineKeyboardButton("🟥 🚪 Logout", callback_data="admin_logout")],
+        [InlineKeyboardButton("📊 Stock Report", callback_data="admin_stock"),
+         InlineKeyboardButton("👥 User Stats", callback_data="admin_users")],
+        [InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast"),
+         InlineKeyboardButton("📋 OTP Log", callback_data="admin_otp_log")],
+        [InlineKeyboardButton("➕ Add Numbers", callback_data="admin_add_numbers"),
+         InlineKeyboardButton("📤 Upload File", callback_data="admin_upload")],
+        [InlineKeyboardButton("🗑️ Delete Numbers", callback_data="admin_delete"),
+         InlineKeyboardButton("🔧 Manage Services", callback_data="admin_manage_services")],
+        [InlineKeyboardButton("🌍 Manage Countries", callback_data="admin_manage_countries"),
+         InlineKeyboardButton("⚙️ Settings", callback_data="admin_settings")],
+        [InlineKeyboardButton("💰 Country Prices", callback_data="admin_country_prices"),
+         InlineKeyboardButton("💸 Withdrawals", callback_data="admin_withdrawals")],
+        [InlineKeyboardButton("👛 Balance Management", callback_data="admin_balance_manage"),
+         InlineKeyboardButton("🤝 Referral Commission", callback_data="admin_referral_commission")],
+        [InlineKeyboardButton("🚪 Logout", callback_data="admin_logout")],
     ])
 
 # ─── User Session State ───
@@ -1343,12 +1343,7 @@ async def handle_get_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE)
     sess = get_session(str(update.effective_user.id))
     sess["state"] = None
 
-    # Railway URL থেকে WebApp URL বানাও
-    base_url = os.environ.get("RAILWAY_STATIC_URL") or \
-               os.environ.get("RAILWAY_PUBLIC_DOMAIN") or \
-               f"http://localhost:{HTTP_PORT}"
-    if not base_url.startswith("http"):
-        base_url = "https://" + base_url
+    base_url = "https://number-bot-production-51e7.up.railway.app"
     webapp_url = base_url.rstrip("/") + "/app"
 
     avail = []
