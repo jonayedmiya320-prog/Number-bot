@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pyotp
 from aiohttp import web as aio_web
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo, CopyTextButton
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     filters, ContextTypes, ConversationHandler
@@ -633,11 +633,11 @@ async def http_otp_handler(request: aio_web.Request) -> aio_web.Response:
                 if otp_code:
                     otp_buttons.append([InlineKeyboardButton(
                         f"🛡 📋 {otp_code}",
-                        copy_text=CopyTextButton(text=otp_code)
+                        callback_data=f"otp_copy:{otp_code}", style="success"
                     )])
                 otp_buttons.append([
-                    InlineKeyboardButton("📢 Channel", url=MAIN_CHANNEL_URL),
-                    InlineKeyboardButton("🤖 Number Bot", url=f"https://t.me/{(await _tg_app.bot.get_me()).username}")
+                    InlineKeyboardButton("📢 Channel", url=MAIN_CHANNEL_URL, style="primary"),
+                    InlineKeyboardButton("🤖 Number Bot", url=f"https://t.me/{(await _tg_app.bot.get_me()).username}", style="primary")
                 ])
                 await _tg_app.bot.send_message(
                     int(uid), notify, parse_mode="Markdown",
@@ -1457,9 +1457,8 @@ async def cb_select_country(update: Update, context: ContextTypes.DEFAULT_TYPE):
             + ("\n📱=WA আছে ❌=নেই" if wa_connected else "")
         )
 
-    # ── নম্বরগুলো সবুজ CopyTextButton হিসেবে দেখাও ──
     num_buttons = [
-        [InlineKeyboardButton(f"⚡ +{n}", copy_text=CopyTextButton(text=f"+{n}"))]
+        [InlineKeyboardButton(f"⚡ 📋 +{n}", callback_data=f"num_copy:{n}", style="success")]
         for n in nums
     ]
     action_buttons = [
@@ -1549,7 +1548,7 @@ async def cb_new_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     num_buttons_new = [
-        [InlineKeyboardButton(f"⚡ +{n}", copy_text=CopyTextButton(text=f"+{n}"))]
+        [InlineKeyboardButton(f"⚡ 📋 +{n}", callback_data=f"num_copy:{n}", style="success")]
         for n in nums
     ]
     action_buttons_new = [
@@ -3345,11 +3344,11 @@ async def handle_otp_group_message(update: Update, context: ContextTypes.DEFAULT
         if otp_code:
             otp_buttons.append([InlineKeyboardButton(
                 f"🛡 📋 {otp_code}",
-                copy_text=CopyTextButton(text=otp_code)
+                callback_data=f"otp_copy:{otp_code}", style="success"
             )])
         otp_buttons.append([
-            InlineKeyboardButton("📢 Channel", url=MAIN_CHANNEL_URL),
-            InlineKeyboardButton("🤖 Number Bot", url=f"https://t.me/{(await context.bot.get_me()).username}")
+            InlineKeyboardButton("📢 Channel", url=MAIN_CHANNEL_URL, style="primary"),
+            InlineKeyboardButton("📨 OTP Group", url=OTP_GROUP, style="danger")
         ])
         await context.bot.send_message(
             uid, notify, parse_mode="Markdown",
@@ -3432,6 +3431,14 @@ def main():
 
     # Callback handlers
     app.add_handler(CallbackQueryHandler(cb_verify, pattern="^verify_user$"))
+    app.add_handler(CallbackQueryHandler(
+        lambda u, c: u.callback_query.answer(f"📋 নম্বর: {u.callback_query.data.split(':',1)[1]}", show_alert=True),
+        pattern="^num_copy:"
+    ))
+    app.add_handler(CallbackQueryHandler(
+        lambda u, c: u.callback_query.answer(f"🔑 OTP: {u.callback_query.data.split(':',1)[1]}", show_alert=True),
+        pattern="^otp_copy:"
+    ))
     app.add_handler(CallbackQueryHandler(lambda u,c: u.callback_query.answer(f"✅ Copied: {u.callback_query.data.split(':',1)[1]}", show_alert=False), pattern="^num:"))
     app.add_handler(CallbackQueryHandler(cb_select_service, pattern="^svc:"))
     app.add_handler(CallbackQueryHandler(cb_select_country, pattern="^cc:"))
