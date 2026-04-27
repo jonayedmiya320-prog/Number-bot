@@ -902,7 +902,7 @@ async def green_api_monitor(app):
                                 "আবার connect করতে নিচের button চাপো।",
                                 parse_mode="Markdown",
                                 reply_markup=InlineKeyboardMarkup([[
-                                    InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect")
+                                    InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect", style="primary")
                                 ]])
                             )
                         except Exception as e:
@@ -967,8 +967,8 @@ async def monitor_wa_connection(uid: str, context):
                         "Disconnect করতে নিচের বাটন চাপো:",
                         parse_mode="Markdown",
                         reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("🔴 Logout / Disconnect", callback_data="wa_disconnect")],
-                            [InlineKeyboardButton("📊 Check Status", callback_data="wa_status")],
+                            [InlineKeyboardButton("🔴 Logout / Disconnect", callback_data="wa_disconnect", style="danger")],
+                            [InlineKeyboardButton("📊 Check Status", callback_data="wa_status", style="primary")],
                         ])
                     )
                 except:
@@ -1134,26 +1134,26 @@ def verify_keyboard():
         [InlineKeyboardButton("1️⃣ Main Channel", url=MAIN_CHANNEL_URL)],
         [InlineKeyboardButton("2️⃣ Number Channel", url=CHAT_GROUP)],
         [InlineKeyboardButton("3️⃣ OTP Group", url=OTP_GROUP)],
-        [InlineKeyboardButton("✅ VERIFY MEMBERSHIP", callback_data="verify_user")],
+        [InlineKeyboardButton("✅ VERIFY MEMBERSHIP", callback_data="verify_user", style="success")],
     ])
 
 def admin_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Stock Report", callback_data="admin_stock"),
-         InlineKeyboardButton("👥 User Stats", callback_data="admin_users")],
-        [InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast"),
-         InlineKeyboardButton("📋 OTP Log", callback_data="admin_otp_log")],
-        [InlineKeyboardButton("➕ Add Numbers", callback_data="admin_add_numbers"),
-         InlineKeyboardButton("📤 Upload File", callback_data="admin_upload")],
-        [InlineKeyboardButton("🗑️ Delete Numbers", callback_data="admin_delete"),
-         InlineKeyboardButton("🔧 Manage Services", callback_data="admin_manage_services")],
-        [InlineKeyboardButton("🌍 Manage Countries", callback_data="admin_manage_countries"),
-         InlineKeyboardButton("⚙️ Settings", callback_data="admin_settings")],
-        [InlineKeyboardButton("💰 Country Prices", callback_data="admin_country_prices"),
-         InlineKeyboardButton("💸 Withdrawals", callback_data="admin_withdrawals")],
-        [InlineKeyboardButton("👛 Balance Management", callback_data="admin_balance_manage"),
-         InlineKeyboardButton("🤝 Referral Commission", callback_data="admin_referral_commission")],
-        [InlineKeyboardButton("🚪 Logout", callback_data="admin_logout")],
+        [InlineKeyboardButton("📊 Stock Report", callback_data="admin_stock", style="success"),
+         InlineKeyboardButton("👥 User Stats", callback_data="admin_users", style="success")],
+        [InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast", style="danger"),
+         InlineKeyboardButton("📋 OTP Log", callback_data="admin_otp_log", style="danger")],
+        [InlineKeyboardButton("➕ Add Numbers", callback_data="admin_add_numbers", style="success"),
+         InlineKeyboardButton("📤 Upload File", callback_data="admin_upload", style="success")],
+        [InlineKeyboardButton("🗑️ Delete Numbers", callback_data="admin_delete", style="danger"),
+         InlineKeyboardButton("🔧 Manage Services", callback_data="admin_manage_services", style="danger")],
+        [InlineKeyboardButton("🌍 Manage Countries", callback_data="admin_manage_countries", style="primary"),
+         InlineKeyboardButton("⚙️ Settings", callback_data="admin_settings", style="primary")],
+        [InlineKeyboardButton("💰 Country Prices", callback_data="admin_country_prices", style="success"),
+         InlineKeyboardButton("💸 Withdrawals", callback_data="admin_withdrawals", style="danger")],
+        [InlineKeyboardButton("👛 Balance Management", callback_data="admin_balance_manage", style="success"),
+         InlineKeyboardButton("🤝 Referral Commission", callback_data="admin_referral_commission", style="success")],
+        [InlineKeyboardButton("🚪 Logout", callback_data="admin_logout", style="danger")],
     ])
 
 # ─── User Session State ───
@@ -1366,12 +1366,12 @@ async def handle_get_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE)
         row = []
         row.append(InlineKeyboardButton(
             f"{avail[i][1]['icon']} {avail[i][1]['name']} ({avail[i][2]})",
-            callback_data=f"svc:{avail[i][0]}"
+            callback_data=f"svc:{avail[i][0]}", style="success"
         ))
         if i+1 < len(avail):
             row.append(InlineKeyboardButton(
                 f"{avail[i+1][1]['icon']} {avail[i+1][1]['name']} ({avail[i+1][2]})",
-                callback_data=f"svc:{avail[i+1][0]}"
+                callback_data=f"svc:{avail[i+1][0]}", style="primary"
             ))
         buttons.append(row)
 
@@ -1397,12 +1397,12 @@ async def cb_select_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for i in range(0, len(ccs), 2):
         row = []
         cc1 = ccs[i]; c1 = countries[cc1]; p1 = get_otp_price(cc1)
-        row.append(InlineKeyboardButton(f"{c1['flag']} {c1['name']} ({p1:.2f}TK)", callback_data=f"cc:{svc_id}:{cc1}"))
+        row.append(InlineKeyboardButton(f"{c1['flag']} {c1['name']} ({p1:.2f}TK)", callback_data=f"cc:{svc_id}:{cc1}", style="success"))
         if i+1 < len(ccs):
             cc2 = ccs[i+1]; c2 = countries[cc2]; p2 = get_otp_price(cc2)
-            row.append(InlineKeyboardButton(f"{c2['flag']} {c2['name']} ({p2:.2f}TK)", callback_data=f"cc:{svc_id}:{cc2}"))
+            row.append(InlineKeyboardButton(f"{c2['flag']} {c2['name']} ({p2:.2f}TK)", callback_data=f"cc:{svc_id}:{cc2}", style="primary"))
         buttons.append(row)
-    buttons.append([InlineKeyboardButton("🔙 Back", callback_data="back_services")])
+    buttons.append([InlineKeyboardButton("🔙 Back", callback_data="back_services", style="primary")])
 
     await query.edit_message_text(
         f"{svc['icon']} *{svc['name']}* — Select Country\n\n_(taka = earnings per OTP)_",
@@ -1467,12 +1467,12 @@ async def cb_select_country(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for n in nums
     ]
     action_buttons = [
-        [InlineKeyboardButton("🔄 Get New Numbers", callback_data=f"newnum:{svc_id}:{cc}")],
-        [InlineKeyboardButton("🔙 Service List", callback_data="back_services")],
+        [InlineKeyboardButton("🔄 Get New Numbers", callback_data=f"newnum:{svc_id}:{cc}", style="danger")],
+        [InlineKeyboardButton("🔙 Service List", callback_data="back_services", style="primary")],
         [InlineKeyboardButton("📨 Open OTP Group", url=OTP_GROUP)],
     ]
     if not wa_connected:
-        action_buttons.append([InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect")])
+        action_buttons.append([InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect", style="primary")])
     buttons = num_buttons + action_buttons
 
     await query.edit_message_text(make_msg(""), parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
@@ -1557,12 +1557,12 @@ async def cb_new_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for n in nums
     ]
     action_buttons_new = [
-        [InlineKeyboardButton("🔄 Get New Numbers", callback_data=f"newnum:{svc_id}:{cc}")],
-        [InlineKeyboardButton("🔙 Service List", callback_data="back_services")],
+        [InlineKeyboardButton("🔄 Get New Numbers", callback_data=f"newnum:{svc_id}:{cc}", style="danger")],
+        [InlineKeyboardButton("🔙 Service List", callback_data="back_services", style="primary")],
         [InlineKeyboardButton("📨 Open OTP Group", url=OTP_GROUP)],
     ]
     if not wa_connected:
-        action_buttons_new.append([InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect")])
+        action_buttons_new.append([InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect", style="primary")])
     buttons = num_buttons_new + action_buttons_new
 
     await query.edit_message_text(make_msg_new(""), parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
@@ -1607,12 +1607,12 @@ async def cb_back_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
         row = []
         row.append(InlineKeyboardButton(
             f"{avail[i][1]['icon']} {avail[i][1]['name']} ({avail[i][2]})",
-            callback_data=f"svc:{avail[i][0]}"
+            callback_data=f"svc:{avail[i][0]}", style="success"
         ))
         if i+1 < len(avail):
             row.append(InlineKeyboardButton(
                 f"{avail[i+1][1]['icon']} {avail[i+1][1]['name']} ({avail[i+1][2]})",
-                callback_data=f"svc:{avail[i+1][0]}"
+                callback_data=f"svc:{avail[i+1][0]}", style="primary"
             ))
         buttons.append(row)
 
@@ -1640,8 +1640,8 @@ async def handle_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📌 *Minimum Withdraw:* {settings['minWithdraw']} taka",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("💸 Withdraw", callback_data="start_withdraw")],
-            [InlineKeyboardButton("📋 Withdraw History", callback_data="withdraw_history")],
+            [InlineKeyboardButton("💸 Withdraw", callback_data="start_withdraw", style="danger")],
+            [InlineKeyboardButton("📋 Withdraw History", callback_data="withdraw_history", style="danger")],
         ])
     )
 
@@ -1668,9 +1668,9 @@ async def handle_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💸 *Withdraw*\n\n💵 Balance: *{e['balance']:.2f} taka*\n\nChoose method:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🟣 bKash", callback_data="wm:bKash"),
-             InlineKeyboardButton("🟠 Nagad", callback_data="wm:Nagad")],
-            [InlineKeyboardButton("❌ Cancel", callback_data="w_cancel")],
+            [InlineKeyboardButton("🟣 bKash", callback_data="wm:bKash", style="primary"),
+             InlineKeyboardButton("🟠 Nagad", callback_data="wm:Nagad", style="primary")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="w_cancel", style="danger")],
         ])
     )
 
@@ -1697,7 +1697,7 @@ async def cb_withdraw_method(update: Update, context: ContextTypes.DEFAULT_TYPE)
             row.append(InlineKeyboardButton(f"{amounts[i+1]} taka", callback_data=f"wa:{method}:{amounts[i+1]}"))
         rows.append(row)
     rows.append([InlineKeyboardButton(f"💰 All ({e['balance']:.2f} taka)", callback_data=f"wa:{method}:{e['balance']:.2f}")])
-    rows.append([InlineKeyboardButton("❌ Cancel", callback_data="w_cancel")])
+    rows.append([InlineKeyboardButton("❌ Cancel", callback_data="w_cancel", style="danger")])
 
     icon = "🟣" if method == "bKash" else "🟠"
     await query.edit_message_text(
@@ -1727,7 +1727,7 @@ async def cb_withdraw_amount(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.edit_message_text(
         f"{icon} *{method} — {amount:.2f} taka*\n\n📱 Your *{method} number:*\nExample: `01712345678`",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="w_cancel")]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="w_cancel", style="danger")]])
     )
 
 async def cb_withdraw_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1756,7 +1756,7 @@ async def cb_withdraw_history(update: Update, context: ContextTypes.DEFAULT_TYPE
             text += f"📱 `{w['account']}` | {date}\n\n"
 
     await query.edit_message_text(text, parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="goto_main")]]))
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="goto_main", style="primary")]]))
 
 async def cb_start_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1779,9 +1779,9 @@ async def cb_start_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💸 *Withdraw*\n\n💵 Balance: *{e['balance']:.2f} taka*\n\nChoose method:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🟣 bKash", callback_data="wm:bKash"),
-             InlineKeyboardButton("🟠 Nagad", callback_data="wm:Nagad")],
-            [InlineKeyboardButton("❌ Cancel", callback_data="w_cancel")],
+            [InlineKeyboardButton("🟣 bKash", callback_data="wm:bKash", style="primary"),
+             InlineKeyboardButton("🟠 Nagad", callback_data="wm:Nagad", style="primary")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="w_cancel", style="danger")],
         ])
     )
 
@@ -1799,8 +1799,8 @@ async def cb_wa_connect(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Disconnect করতে নিচের বাটন চাপো:",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔴 Logout / Disconnect", callback_data="wa_disconnect")],
-                [InlineKeyboardButton("📊 Check Status", callback_data="wa_status")],
+                [InlineKeyboardButton("🔴 Logout / Disconnect", callback_data="wa_disconnect", style="danger")],
+                [InlineKeyboardButton("📊 Check Status", callback_data="wa_status", style="primary")],
             ])
         )
         return
@@ -1833,8 +1833,8 @@ async def cb_wa_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "notAuthorized": "🔴 *WhatsApp connected নেই।*\n\nCode enter করলে আবার Check Status চাপো।",
     }
     text = STATE_MAP.get(state, f"❓ Unknown state: {state}")
-    btns = [[InlineKeyboardButton("🔴 Disconnect", callback_data="wa_disconnect")]] if conn else \
-           [[InlineKeyboardButton("📱 Connect", callback_data="wa_connect")]]
+    btns = [[InlineKeyboardButton("🔴 Disconnect", callback_data="wa_disconnect", style="danger")]] if conn else \
+           [[InlineKeyboardButton("📱 Connect", callback_data="wa_connect", style="primary")]]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(btns))
 
 async def cb_wa_disconnect(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1857,7 +1857,7 @@ async def cb_wa_disconnect(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "আবার connect করতে নিচের বাটন চাপো:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect")],
+            [InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect", style="primary")],
         ])
     )
 
@@ -1874,17 +1874,17 @@ async def handle_tempmail(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📧 *Temporary Email*\n\n📌 Your email:\n`{existing['address']}`",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📬 Check Inbox", callback_data="tm_inbox")],
-                [InlineKeyboardButton("📋 Show Email", callback_data="tm_show")],
-                [InlineKeyboardButton("🔄 Get New Email", callback_data="tm_create")],
-                [InlineKeyboardButton("🗑️ Delete Email", callback_data="tm_delete")],
+                [InlineKeyboardButton("📬 Check Inbox", callback_data="tm_inbox", style="primary")],
+                [InlineKeyboardButton("📋 Show Email", callback_data="tm_show", style="primary")],
+                [InlineKeyboardButton("🔄 Get New Email", callback_data="tm_create", style="success")],
+                [InlineKeyboardButton("🗑️ Delete Email", callback_data="tm_delete", style="danger")],
             ])
         )
     else:
         await update.message.reply_text(
             "📧 *Temporary Email*\n\n✅ Create a new disposable email address.",
             parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🆕 Create New Email", callback_data="tm_create")]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🆕 Create New Email", callback_data="tm_create", style="primary")]])
         )
 
 async def cb_tm_create(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1902,7 +1902,7 @@ async def cb_tm_create(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "❌ *Email creation failed.* Please try again.",
                     chat_id=uid, message_id=loading.message_id,
                     parse_mode="Markdown",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Retry", callback_data="tm_create")]])
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Retry", callback_data="tm_create", style="primary")]])
                 )
                 return
 
@@ -1914,9 +1914,9 @@ async def cb_tm_create(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=uid, message_id=loading.message_id,
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("📬 Check Inbox", callback_data="tm_inbox")],
-                    [InlineKeyboardButton("🔄 Get New Email", callback_data="tm_create")],
-                    [InlineKeyboardButton("🗑️ Delete", callback_data="tm_delete")],
+                    [InlineKeyboardButton("📬 Check Inbox", callback_data="tm_inbox", style="primary")],
+                    [InlineKeyboardButton("🔄 Get New Email", callback_data="tm_create", style="success")],
+                    [InlineKeyboardButton("🗑️ Delete", callback_data="tm_delete", style="danger")],
                 ])
             )
         except Exception as e:
@@ -1940,7 +1940,7 @@ async def cb_tm_inbox(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid not in temp_mails:
         return await query.edit_message_text(
             "❌ No email found.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🆕 Create", callback_data="tm_create")]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🆕 Create", callback_data="tm_create", style="primary")]])
         )
 
     email_obj = temp_mails[uid]
@@ -1966,9 +1966,9 @@ async def cb_tm_inbox(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             try:
                 await query.edit_message_text(text[:4000], parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔄 Refresh", callback_data="tm_inbox")],
-                    [InlineKeyboardButton("🔄 New Email", callback_data="tm_create")],
-                    [InlineKeyboardButton("🗑️ Delete", callback_data="tm_delete")],
+                    [InlineKeyboardButton("🔄 Refresh", callback_data="tm_inbox", style="primary")],
+                    [InlineKeyboardButton("🔄 New Email", callback_data="tm_create", style="primary")],
+                    [InlineKeyboardButton("🗑️ Delete", callback_data="tm_delete", style="danger")],
                 ]))
             except:
                 pass
@@ -1988,8 +1988,8 @@ async def cb_tm_show(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📧 *Your Temp Email:*\n\n`{addr}`",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📬 Check Inbox", callback_data="tm_inbox")],
-            [InlineKeyboardButton("🔄 New Email", callback_data="tm_create")],
+            [InlineKeyboardButton("📬 Check Inbox", callback_data="tm_inbox", style="primary")],
+            [InlineKeyboardButton("🔄 New Email", callback_data="tm_create", style="primary")],
         ])
     )
 
@@ -2010,10 +2010,10 @@ async def handle_2fa(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔐 *2-Step Verification Code Generator*\n\nSelect a service:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📘 Facebook 2FA", callback_data="totp:facebook")],
-            [InlineKeyboardButton("📸 Instagram 2FA", callback_data="totp:instagram")],
-            [InlineKeyboardButton("🔍 Google 2FA", callback_data="totp:google")],
-            [InlineKeyboardButton("⚙️ Other 2FA", callback_data="totp:other")],
+            [InlineKeyboardButton("📘 Facebook 2FA", callback_data="totp:facebook", style="primary")],
+            [InlineKeyboardButton("📸 Instagram 2FA", callback_data="totp:instagram", style="primary")],
+            [InlineKeyboardButton("🔍 Google 2FA", callback_data="totp:google", style="primary")],
+            [InlineKeyboardButton("⚙️ Other 2FA", callback_data="totp:other", style="primary")],
         ])
     )
 
@@ -2042,7 +2042,7 @@ async def cb_totp_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔑 It looks like: `JBSWY3DPEHPK3PXP`\n\n"
         f"Type /cancel to cancel",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="totp_back")]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="totp_back", style="danger")]])
     )
 
 async def cb_totp_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2052,10 +2052,10 @@ async def cb_totp_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔐 *2FA Code Generator*\n\nSelect a service:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📘 Facebook 2FA", callback_data="totp:facebook")],
-            [InlineKeyboardButton("📸 Instagram 2FA", callback_data="totp:instagram")],
-            [InlineKeyboardButton("🔍 Google 2FA", callback_data="totp:google")],
-            [InlineKeyboardButton("⚙️ Other 2FA", callback_data="totp:other")],
+            [InlineKeyboardButton("📘 Facebook 2FA", callback_data="totp:facebook", style="primary")],
+            [InlineKeyboardButton("📸 Instagram 2FA", callback_data="totp:instagram", style="primary")],
+            [InlineKeyboardButton("🔍 Google 2FA", callback_data="totp:google", style="primary")],
+            [InlineKeyboardButton("⚙️ Other 2FA", callback_data="totp:other", style="primary")],
         ])
     )
 
@@ -2067,7 +2067,7 @@ async def cb_totp_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if secret_enc == "TOOLONG":
         await query.edit_message_text(
             "⚠️ Secret key টি অনেক বড়। Refresh করতে আবার 🔐 2FA বাটন চাপুন।",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="totp_back")]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="totp_back", style="primary")]])
         )
         return
 
@@ -2092,7 +2092,7 @@ async def cb_totp_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔄 Refresh Code", callback_data=cb_data)],
-                [InlineKeyboardButton("🔙 Back", callback_data="totp_back")],
+                [InlineKeyboardButton("🔙 Back", callback_data="totp_back", style="primary")],
             ])
         )
     except:
@@ -2103,7 +2103,7 @@ async def handle_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "💬 *Support*\n\nContact admin:\n📌 @Asif_store_bot",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Contact", url="https://t.me/Asif_store_bot")]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Contact", url="https://t.me/Asif_store_bot", style="primary")]])
     )
 
 async def handle_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2149,8 +2149,8 @@ async def cb_admin_stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
         report = report[:3950] + "\n..._truncated_"
 
     await safe_edit(query, report, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔄 Refresh", callback_data="admin_stock")],
-        [InlineKeyboardButton("🔙 Back", callback_data="admin_back")],
+        [InlineKeyboardButton("🔄 Refresh", callback_data="admin_stock", style="primary")],
+        [InlineKeyboardButton("🔙 Back", callback_data="admin_back", style="primary")],
     ]))
 
 async def cb_admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2177,8 +2177,8 @@ async def cb_admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         try:
             await safe_edit(query, msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔄 Refresh", callback_data="admin_users")],
-                [InlineKeyboardButton("🔙 Back", callback_data="admin_back")],
+                [InlineKeyboardButton("🔄 Refresh", callback_data="admin_users", style="primary")],
+                [InlineKeyboardButton("🔙 Back", callback_data="admin_back", style="primary")],
             ]))
         except Exception as edit_err:
             raise
@@ -2188,7 +2188,7 @@ async def cb_admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(
                 f"❌ *Error loading user stats*\n\n`{str(e)[:200]}`",
                 parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_back")]])
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_back", style="primary")]])
             )
         except:
             pass
@@ -2209,8 +2209,8 @@ async def cb_admin_otp_log(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg += f"🕐 {get_time_ago(log.get('timestamp',''))}\n\n"
 
     await safe_edit(query, msg[:4000], parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔄 Refresh", callback_data="admin_otp_log")],
-        [InlineKeyboardButton("🔙 Back", callback_data="admin_back")],
+        [InlineKeyboardButton("🔄 Refresh", callback_data="admin_otp_log", style="primary")],
+        [InlineKeyboardButton("🔙 Back", callback_data="admin_back", style="primary")],
     ]))
 
 async def cb_admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2224,7 +2224,7 @@ async def cb_admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.edit_message_text(
         "📢 *Broadcast Message*\n\nSend the message to broadcast to all users:",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel")]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="danger")]])
     )
 
 async def cb_admin_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2244,13 +2244,13 @@ async def cb_admin_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🏧 Withdraw: *{'Enabled ✅' if settings['withdrawEnabled'] else 'Disabled ❌'}*",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📞 Number Count", callback_data="as_count"),
-             InlineKeyboardButton("⏱ Cooldown", callback_data="as_cooldown")],
+            [InlineKeyboardButton("📞 Number Count", callback_data="as_count", style="primary"),
+             InlineKeyboardButton("⏱ Cooldown", callback_data="as_cooldown", style="primary")],
             [InlineKeyboardButton(f"🔐 Verification {'Disable' if settings['requireVerification'] else 'Enable'}", callback_data="as_toggle_verify")],
-            [InlineKeyboardButton("💵 OTP Price", callback_data="as_price"),
-             InlineKeyboardButton("💸 Min Withdraw", callback_data="as_minw")],
+            [InlineKeyboardButton("💵 OTP Price", callback_data="as_price", style="primary"),
+             InlineKeyboardButton("💸 Min Withdraw", callback_data="as_minw", style="danger")],
             [InlineKeyboardButton(f"🏧 Withdraw {'🔴 Disable' if settings['withdrawEnabled'] else '🟢 Enable'}", callback_data="as_toggle_withdraw")],
-            [InlineKeyboardButton("🔙 Back", callback_data="admin_back")],
+            [InlineKeyboardButton("🔙 Back", callback_data="admin_back", style="primary")],
         ])
     )
 
@@ -2284,7 +2284,7 @@ async def cb_as_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         f"📞 *Set Number Count*\n\nCurrent: *{settings['defaultNumberCount']}*\n\nSend new count (1-100):",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel")]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="danger")]])
     )
 
 async def cb_as_cooldown(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2297,7 +2297,7 @@ async def cb_as_cooldown(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         f"⏱ *Set Cooldown*\n\nCurrent: *{settings['cooldownSeconds']} seconds*\n\nSend new cooldown (1-3600):",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel")]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="danger")]])
     )
 
 async def cb_as_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2310,7 +2310,7 @@ async def cb_as_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         f"💵 *Set Default OTP Price*\n\nCurrent: *{settings.get('defaultOtpPrice', 0.25):.2f} taka*\n\nSend new price:",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel")]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="danger")]])
     )
 
 async def cb_as_minw(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2323,7 +2323,7 @@ async def cb_as_minw(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         f"💸 *Set Min Withdraw*\n\nCurrent: *{settings['minWithdraw']} taka*\n\nSend new minimum:",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel")]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="danger")]])
     )
 
 async def cb_admin_add_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2336,7 +2336,7 @@ async def cb_admin_add_numbers(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.edit_message_text(
         "➕ *Add Numbers*\n\nFormat:\n`[number]|[country code]|[service]`\n\nExample:\n`8801712345678|880|whatsapp`",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel")]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="danger")]])
     )
 
 async def cb_admin_withdrawals(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2360,7 +2360,7 @@ async def cb_admin_withdrawals(update: Update, context: ContextTypes.DEFAULT_TYP
             InlineKeyboardButton(f"✅ {w['id'][-6:]}", callback_data=f"wadm_approve:{w['id']}"),
             InlineKeyboardButton(f"❌ {w['id'][-6:]}", callback_data=f"wadm_reject:{w['id']}"),
         ])
-    buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_back")])
+    buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_back", style="primary")])
 
     await query.edit_message_text(msg[:4000], parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
 
@@ -2420,10 +2420,10 @@ async def cb_admin_balance_manage(update: Update, context: ContextTypes.DEFAULT_
         "👛 *Balance Management*\n\nSelect action:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ Add Balance", callback_data="bal_add"),
-             InlineKeyboardButton("➖ Deduct Balance", callback_data="bal_deduct")],
-            [InlineKeyboardButton("🔄 Reset Balance", callback_data="bal_reset")],
-            [InlineKeyboardButton("🔙 Back", callback_data="admin_back")],
+            [InlineKeyboardButton("➕ Add Balance", callback_data="bal_add", style="success"),
+             InlineKeyboardButton("➖ Deduct Balance", callback_data="bal_deduct", style="success")],
+            [InlineKeyboardButton("🔄 Reset Balance", callback_data="bal_reset", style="success")],
+            [InlineKeyboardButton("🔙 Back", callback_data="admin_back", style="primary")],
         ])
     )
 
@@ -2437,7 +2437,7 @@ async def cb_bal_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         "➕ *Add Balance*\n\nFormat: `[userId] [amount]`\nExample: `123456789 50`",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel")]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="danger")]])
     )
 
 async def cb_bal_deduct(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2450,7 +2450,7 @@ async def cb_bal_deduct(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         "➖ *Deduct Balance*\n\nFormat: `[userId] [amount]`",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel")]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="danger")]])
     )
 
 async def cb_bal_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2463,7 +2463,7 @@ async def cb_bal_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         "🔄 *Reset Balance*\n\nSend the userId:",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel")]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="danger")]])
     )
 
 async def cb_admin_country_prices(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2480,7 +2480,7 @@ async def cb_admin_country_prices(update: Update, context: ContextTypes.DEFAULT_
     text += "\nSend new prices (format: `880 0.50`):"
 
     await query.edit_message_text(text, parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel")]]))
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="danger")]]))
 
 async def cb_admin_manage_countries(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -2492,9 +2492,9 @@ async def cb_admin_manage_countries(update: Update, context: ContextTypes.DEFAUL
         f"🌍 *Manage Countries*\n\nTotal: *{len(countries)}*",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ Add Country", callback_data="country_add"),
-             InlineKeyboardButton("📋 List Countries", callback_data="country_list")],
-            [InlineKeyboardButton("🔙 Back", callback_data="admin_back")],
+            [InlineKeyboardButton("➕ Add Country", callback_data="country_add", style="primary"),
+             InlineKeyboardButton("📋 List Countries", callback_data="country_list", style="primary")],
+            [InlineKeyboardButton("🔙 Back", callback_data="admin_back", style="primary")],
         ])
     )
 
@@ -2506,7 +2506,7 @@ async def cb_country_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         p = country_prices.get(cc, settings.get("defaultOtpPrice", 0.25))
         text += f"{c['flag']} *{c['name']}* (+{cc}) — {p:.2f} TK/OTP\n"
     await query.edit_message_text(text[:4000], parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_manage_countries")]]))
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_manage_countries", style="primary")]]))
 
 async def cb_country_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -2516,7 +2516,7 @@ async def cb_country_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         "🌍 *Add Country*\n\nFormat: `[code] [name] [flag]`\nExample: `880 Bangladesh 🇧🇩`",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel")]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="danger")]])
     )
 
 async def cb_admin_manage_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2529,9 +2529,9 @@ async def cb_admin_manage_services(update: Update, context: ContextTypes.DEFAULT
         "🔧 *Manage Services*",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📋 List Services", callback_data="svc_list"),
-             InlineKeyboardButton("➕ Add Service", callback_data="svc_add")],
-            [InlineKeyboardButton("🔙 Back", callback_data="admin_back")],
+            [InlineKeyboardButton("📋 List Services", callback_data="svc_list", style="primary"),
+             InlineKeyboardButton("➕ Add Service", callback_data="svc_add", style="primary")],
+            [InlineKeyboardButton("🔙 Back", callback_data="admin_back", style="primary")],
         ])
     )
 
@@ -2542,7 +2542,7 @@ async def cb_svc_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for svc_id, svc in services.items():
         text += f"• {svc['icon']} *{svc['name']}* (ID: `{svc_id}`)\n"
     await query.edit_message_text(text, parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_manage_services")]]))
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_manage_services", style="primary")]]))
 
 async def cb_svc_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -2552,7 +2552,7 @@ async def cb_svc_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         "🔧 *Add Service*\n\nFormat: `[id] [name] [icon]`\nExample: `facebook Facebook 📘`",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel")]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="danger")]])
     )
 
 async def cb_admin_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2566,7 +2566,7 @@ async def cb_admin_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     buttons = [[InlineKeyboardButton(f"{svc['icon']} {svc['name']}", callback_data=f"upload_svc:{svc_id}")]
                for svc_id, svc in services.items()]
-    buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel")])
+    buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="danger")])
     await query.edit_message_text("📤 *Upload Numbers*\n\nSelect service:", parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(buttons))
 
@@ -2582,7 +2582,7 @@ async def cb_upload_svc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         f"📤 *Upload Numbers for {svc['name']}*\n\nSend a .txt file with numbers (one per line).",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel")]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="danger")]])
     )
 
 async def cb_admin_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2600,7 +2600,7 @@ async def cb_admin_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     get_session(uid)["state"] = None
     get_session(uid)["data"]  = None
     await query.edit_message_text("❌ *Cancelled.*", parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🛠 Back to Admin", callback_data="admin_back")]]))
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🛠 Back to Admin", callback_data="admin_back", style="primary")]]))
 
 async def cb_admin_logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -2627,7 +2627,7 @@ async def cb_admin_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"🗑️ +{cc}/{svc_id} ({len(nums)})",
                     callback_data=f"del_confirm:{cc}:{svc_id}"
                 )])
-    buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="admin_back")])
+    buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="admin_back", style="danger")])
     await query.edit_message_text("🗑️ *Delete Numbers*\n\nSelect to delete:", parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(buttons))
 
@@ -2644,7 +2644,7 @@ async def cb_del_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Yes", callback_data=f"del_exec:{cc}:{svc_id}"),
-             InlineKeyboardButton("❌ No", callback_data="admin_back")],
+             InlineKeyboardButton("❌ No", callback_data="admin_back", style="primary")],
         ])
     )
 
@@ -2662,7 +2662,7 @@ async def cb_del_exec(update: Update, context: ContextTypes.DEFAULT_TYPE):
             del numbers_by_cs[cc]
     await async_save_numbers()
     await query.edit_message_text(f"✅ *Deleted {count} numbers.*", parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_back")]]))
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_back", style="primary")]]))
 
 async def cb_goto_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -2800,8 +2800,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"✅ Code enter করার পর *Check Status* চাপো।",
                     parse_mode="Markdown",
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("✅ Check Status", callback_data="wa_status")],
-                        [InlineKeyboardButton("🔄 New Code", callback_data="wa_connect")],
+                        [InlineKeyboardButton("✅ Check Status", callback_data="wa_status", style="success")],
+                        [InlineKeyboardButton("🔄 New Code", callback_data="wa_connect", style="primary")],
                     ])
                 )
                 asyncio.create_task(monitor_wa_connection(uid, context))
@@ -2813,7 +2813,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     uid,
                     f"❌ *Connection failed:* {str(e)[:150]}\n\nকিছুক্ষণ পর আবার try করো।",
                     parse_mode="Markdown",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Try Again", callback_data="wa_connect")]])
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Try Again", callback_data="wa_connect", style="primary")]])
                 )
 
         asyncio.create_task(wa_task())
@@ -2845,7 +2845,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔄 Try Again", callback_data=f"totp:{svc}")],
-                    [InlineKeyboardButton("🔙 Back", callback_data="totp_back")],
+                    [InlineKeyboardButton("🔙 Back", callback_data="totp_back", style="primary")],
                 ])
             )
             return
@@ -2870,7 +2870,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔄 Refresh Code", callback_data=cb_data)],
-                    [InlineKeyboardButton("🔙 Back", callback_data="totp_back")],
+                    [InlineKeyboardButton("🔙 Back", callback_data="totp_back", style="primary")],
                 ])
             )
         except Exception as e:
@@ -2901,8 +2901,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💵 Amount: *{amount:.2f} taka*",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ Confirm", callback_data="w_confirm"),
-                 InlineKeyboardButton("❌ Cancel", callback_data="w_cancel")],
+                [InlineKeyboardButton("✅ Confirm", callback_data="w_confirm", style="success"),
+                 InlineKeyboardButton("❌ Cancel", callback_data="w_cancel", style="danger")],
             ])
         )
         return
@@ -3118,7 +3118,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 f"{icon} *{method} — {amount:.2f} taka*\n\n📱 Your {method} number:",
                 parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="w_cancel")]])
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="w_cancel", style="danger")]])
             )
         except:
             pass
@@ -3203,17 +3203,17 @@ async def handle_webapp_data(update: Update, context: ContextTypes.DEFAULT_TYPE)
             price   = get_otp_price(cc)
 
             num_buttons = [
-                [InlineKeyboardButton(f"⚡ +{n}", callback_data=f"num:{n}")]
+                [InlineKeyboardButton(f"⚡ +{n}", callback_data=f"num:{n}", style="success")]
                 for n in nums
             ]
             action_buttons = [
-                [InlineKeyboardButton("🔄 Get New Numbers", callback_data=f"newnum:{svc_id}:{cc}")],
-                [InlineKeyboardButton("🔙 Change Country", callback_data="back_services")],
+                [InlineKeyboardButton("🔄 Get New Numbers", callback_data=f"newnum:{svc_id}:{cc}", style="danger")],
+                [InlineKeyboardButton("🔙 Change Country", callback_data="back_services", style="primary")],
                 [InlineKeyboardButton("📨 OTP Group", url=OTP_GROUP)],
             ]
             wa_connected = wa_sessions.get(uid, {}).get("connected", False)
             if not wa_connected:
-                action_buttons.append([InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect")])
+                action_buttons.append([InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect", style="primary")])
 
             msg = (
                 f"✅ *{len(nums)} Number(s) Assigned!*\n\n"
@@ -3280,11 +3280,11 @@ async def cb_admin_referral_commission(update: Update, context: ContextTypes.DEF
         f"_0 দিলে রেফারেল বন্ধ হবে_",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("5%", callback_data="setcom:5"),
-             InlineKeyboardButton("10%", callback_data="setcom:10"),
-             InlineKeyboardButton("15%", callback_data="setcom:15"),
-             InlineKeyboardButton("20%", callback_data="setcom:20")],
-            [InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel")],
+            [InlineKeyboardButton("5%", callback_data="setcom:5", style="primary"),
+             InlineKeyboardButton("10%", callback_data="setcom:10", style="primary"),
+             InlineKeyboardButton("15%", callback_data="setcom:15", style="primary"),
+             InlineKeyboardButton("20%", callback_data="setcom:20", style="primary")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="danger")],
         ])
     )
 
@@ -3301,7 +3301,7 @@ async def cb_setcom(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         f"✅ *Referral Commission updated!*\n\nনতুন কমিশন: *{val}%*",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_back")]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_back", style="primary")]])
     )
 async def handle_otp_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
