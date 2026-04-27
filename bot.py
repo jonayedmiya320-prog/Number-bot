@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pyotp
 from aiohttp import web as aio_web
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, CopyTextButton
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     filters, ContextTypes, ConversationHandler
@@ -1248,23 +1248,27 @@ async def cb_select_country(update: Update, context: ContextTypes.DEFAULT_TYPE):
     svc     = services.get(svc_id, {"icon": "📞", "name": svc_id})
     price   = get_otp_price(cc)
     wa_connected = wa_sessions.get(uid, {}).get("connected", False)
-    nums_text = "\n".join(
-        f"{i+1}. `+{n}`" + (" ⏳" if wa_connected else "")
-        for i, n in enumerate(nums)
+
+    msg_header = (
+        f"✅ *{len(nums)} Number(s) Assigned!*\n\n"
+        f"{svc['icon']} *Service:* {svc['name']}\n"
+        f"{country['flag']} *Country:* {country['name']}\n"
+        f"💵 *Earnings per OTP:* {price:.2f} taka\n\n"
+        f"📌 OTP automatically আসবে।"
+        + ("\n📱=WA আছে ❌=নেই" if wa_connected else "")
     )
 
-    def make_msg(nt):
-        return (
-            f"✅ *{len(nums)} Number(s) Assigned!*\n\n"
-            f"{svc['icon']} *Service:* {svc['name']}\n"
-            f"{country['flag']} *Country:* {country['name']}\n"
-            f"💵 *Earnings per OTP:* {price:.2f} taka\n\n"
-            f"📞 *Numbers:*\n{nt}\n\n"
-            f"📌 OTP automatically আসবে।"
-            + ("\n📱=WA আছে ❌=নেই" if wa_connected else "")
-        )
+    _copy_styles = ["success", "primary", "danger"]
+    buttons = []
+    for _ci, n in enumerate(nums):
+        wa_icon = " ⏳" if wa_connected else ""
+        buttons.append([InlineKeyboardButton(
+            text=f"📋 Copy: +{n}{wa_icon}",
+            copy_text=CopyTextButton(text=f"+{n}"),
+            api_kwargs={"style": _copy_styles[_ci % 3]}
+        )])
 
-    buttons = [
+    buttons += [
         [InlineKeyboardButton("📨 Open OTP Group", url=OTP_GROUP, api_kwargs={"style": "primary"})],
         [InlineKeyboardButton("🔄 Get New Numbers", callback_data=f"newnum:{svc_id}:{cc}", api_kwargs={"style": "success"})],
         [InlineKeyboardButton("🔙 Service List", callback_data="back_services", api_kwargs={"style": "danger"})],
@@ -1272,7 +1276,7 @@ async def cb_select_country(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not wa_connected:
         buttons.append([InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect", api_kwargs={"style": "primary"})])
 
-    await query.edit_message_text(make_msg(nums_text), parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
+    await query.edit_message_text(msg_header, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
 
     if wa_connected:
         chat_id = query.message.chat_id
@@ -1284,14 +1288,25 @@ async def cb_select_country(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             res = {n: (r if not isinstance(r, Exception) else None)
                    for n, r in zip(nums, results)}
-            updated = "\n".join(
-                f"{i+1}. `+{n}`" + (" 📱" if res.get(n) is True else (" ❌" if res.get(n) is False else " ⬜"))
-                for i, n in enumerate(nums)
-            )
+            updated_buttons = []
+            for _ci, n in enumerate(nums):
+                wa_icon = " 📱" if res.get(n) is True else (" ❌" if res.get(n) is False else " ⬜")
+                updated_buttons.append([InlineKeyboardButton(
+                    text=f"📋 Copy: +{n}{wa_icon}",
+                    copy_text=CopyTextButton(text=f"+{n}"),
+                    api_kwargs={"style": _copy_styles[_ci % 3]}
+                )])
+            updated_buttons += [
+                [InlineKeyboardButton("📨 Open OTP Group", url=OTP_GROUP, api_kwargs={"style": "primary"})],
+                [InlineKeyboardButton("🔄 Get New Numbers", callback_data=f"newnum:{svc_id}:{cc}", api_kwargs={"style": "success"})],
+                [InlineKeyboardButton("🔙 Service List", callback_data="back_services", api_kwargs={"style": "danger"})],
+            ]
+            if not wa_connected:
+                updated_buttons.append([InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect", api_kwargs={"style": "primary"})])
             try:
                 await context.bot.edit_message_text(
-                    make_msg(updated), chat_id=chat_id, message_id=msg_id,
-                    parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons)
+                    msg_header, chat_id=chat_id, message_id=msg_id,
+                    parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(updated_buttons)
                 )
             except: pass
         asyncio.create_task(do_wa_check())
