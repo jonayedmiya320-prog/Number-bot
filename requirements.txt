@@ -2,3 +2,5 @@ python-telegram-bot==21.3
 pyotp==2.9.0
 openpyxl
 aiohttp==3.9.3
+requests==2.31.0
+httpx==0.26.0
