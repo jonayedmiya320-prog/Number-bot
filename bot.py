@@ -1238,7 +1238,22 @@ async def cb_select_country(update: Update, context: ContextTypes.DEFAULT_TYPE):
             + ("\n📱=WA আছে ❌=নেই" if wa_connected else "")
         )
 
-    buttons = [
+    # ── Copy buttons — ২টা করে এক row, native Telegram copy ──
+    from telegram import CopyTextButton
+    copy_rows = []
+    for i in range(0, len(nums), 2):
+        row = [InlineKeyboardButton(
+            text=f"📋 +{nums[i]}",
+            copy_text=CopyTextButton(text=f"+{nums[i]}")
+        )]
+        if i + 1 < len(nums):
+            row.append(InlineKeyboardButton(
+                text=f"📋 +{nums[i+1]}",
+                copy_text=CopyTextButton(text=f"+{nums[i+1]}")
+            ))
+        copy_rows.append(row)
+
+    buttons = copy_rows + [
         [InlineKeyboardButton("📨 Open OTP Group", url=OTP_GROUP, api_kwargs={"style": "primary"})],
         [InlineKeyboardButton("🔄 Get New Numbers", callback_data=f"newnum:{svc_id}:{cc}", api_kwargs={"style": "success"})],
         [InlineKeyboardButton("🔙 Service List", callback_data="back_services", api_kwargs={"style": "danger"})],
@@ -1318,7 +1333,22 @@ async def cb_new_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
             + ("\n📱=WA আছে ❌=নেই" if wa_connected else "")
         )
 
-    buttons = [
+    # ── Copy buttons — ২টা করে এক row, native Telegram copy ──
+    from telegram import CopyTextButton
+    copy_rows_new = []
+    for i in range(0, len(nums), 2):
+        row = [InlineKeyboardButton(
+            text=f"📋 +{nums[i]}",
+            copy_text=CopyTextButton(text=f"+{nums[i]}")
+        )]
+        if i + 1 < len(nums):
+            row.append(InlineKeyboardButton(
+                text=f"📋 +{nums[i+1]}",
+                copy_text=CopyTextButton(text=f"+{nums[i+1]}")
+            ))
+        copy_rows_new.append(row)
+
+    buttons = copy_rows_new + [
         [InlineKeyboardButton("📨 Open OTP Group", url=OTP_GROUP, api_kwargs={"style": "primary"})],
         [InlineKeyboardButton("🔄 Get New Numbers", callback_data=f"newnum:{svc_id}:{cc}", api_kwargs={"style": "success"})],
         [InlineKeyboardButton("🔙 Service List", callback_data="back_services", api_kwargs={"style": "danger"})],
