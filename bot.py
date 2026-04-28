@@ -30,16 +30,16 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 # ─── Configuration ───
-BOT_TOKEN = "8673568842:AAF6vu1PDsLVbN5ljhISEJ95FBbC7344MyA"
+BOT_TOKEN = "8739818208:AAGc10CkvGFnfPqYukwT7mPhy3iGj7WNpGc"
 ADMIN_PASSWORD = "Earnmaster"
 
-MAIN_CHANNEL     = "@earning_hub_official_channel"
-MAIN_CHANNEL_URL = "https://t.me/earning_hub_official_channel"
-MAIN_CHANNEL_ID  = -1003543718769
-CHAT_GROUP       = "https://t.me/earning_hub_number_channel"
-CHAT_GROUP_ID    = -1003875142184
-OTP_GROUP        = "https://t.me/EarningHub_otp"
-OTP_GROUP_ID     = -1003247504066
+MAIN_CHANNEL     = "@+QylG3hEY19c1Y2Y0"
+MAIN_CHANNEL_URL = "https://t.me/+ejnPW9QGW9s0NDc0"
+MAIN_CHANNEL_ID  = -1001579502447
+CHAT_GROUP       = "https://t.me/+RmiAXvgxUtw3ZTU1"
+CHAT_GROUP_ID    = -1003672144557
+OTP_GROUP        = "https://t.me/+_LAWl3HB98NmZTRl"
+OTP_GROUP_ID     = -1003774165897
 
 # ─── Baileys API (WhatsApp) ───
 BAILEYS_URL = os.environ.get("BAILEYS_URL", "http://localhost:3000")
