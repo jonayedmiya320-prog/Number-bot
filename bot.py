@@ -30,16 +30,16 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 # ─── Configuration ───
-BOT_TOKEN = "8673568842:AAF6vu1PDsLVbN5ljhISEJ95FBbC7344MyA"
+BOT_TOKEN = "8739818208:AAGc10CkvGFnfPqYukwT7mPhy3iGj7WNpGc"
 ADMIN_PASSWORD = "Earnmaster"
 
-MAIN_CHANNEL     = "@earning_hub_official_channel"
-MAIN_CHANNEL_URL = "https://t.me/earning_hub_official_channel"
-MAIN_CHANNEL_ID  = -1003543718769
-CHAT_GROUP       = "https://t.me/earning_hub_number_channel"
-CHAT_GROUP_ID    = -1003875142184
-OTP_GROUP        = "https://t.me/EarningHub_otp"
-OTP_GROUP_ID     = -1003247504066
+MAIN_CHANNEL     = "@+QylG3hEY19c1Y2Y0"
+MAIN_CHANNEL_URL = "https://t.me/+ejnPW9QGW9s0NDc0"
+MAIN_CHANNEL_ID  = -1001579502447
+CHAT_GROUP       = "https://t.me/+RmiAXvgxUtw3ZTU1"
+CHAT_GROUP_ID    = -1003672144557
+OTP_GROUP        = "https://t.me/+_LAWl3HB98NmZTRl"
+OTP_GROUP_ID     = -1003774165897
 
 # ─── Baileys API (WhatsApp) ───
 BAILEYS_URL = os.environ.get("BAILEYS_URL", "http://localhost:3000")
@@ -942,28 +942,20 @@ async def ensure_verified(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     uid  = str(user.id)
     sess = get_session(uid)
 
+    # Admin সবসময় pass
     if sess["is_admin"] or is_admin(uid):
         sess["is_admin"] = True
         return True
 
+    # Verification বন্ধ থাকলে pass
     if not settings.get("requireVerification", True):
         return True
 
-    now = time.time()
-    RECHECK = 2 * 3600
-    if sess["verified"] and (now - sess["last_verification_check"]) < RECHECK:
+    # Local flag চেক — chat_member handler real-time এ update করে
+    if sess.get("verified") or users.get(uid, {}).get("verified", False):
         return True
 
-    membership = await check_membership(user.id, context.application)
-    if membership["allJoined"]:
-        sess["verified"] = True
-        sess["last_verification_check"] = now
-        if uid in users:
-            users[uid]["verified"] = True
-            await async_save_users()
-        return True
-
-    sess["verified"] = False
+    # Verified না — rejoin করতে বলো, block না
     msg = (
         "⚠️ *Bot ব্যবহার করতে সকল গ্রুপে join করতে হবে!*\n\n"
         "নিচের সবগুলোতে join করুন, তারপর VERIFY চাপুন:"
@@ -998,26 +990,13 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if context.args and context.args[0].startswith("ref_"):
             referrer_id = context.args[0][4:]
+            # শুধু referredBy সেট করো — verify সফল হওয়ার আগে count হবে না
             if (referrer_id != uid
                     and not users[uid].get("referredBy")
                     and referrer_id in users):
                 users[uid]["referredBy"] = referrer_id
-                users[referrer_id]["referralCount"] = users[referrer_id].get("referralCount", 0) + 1
-                referrals.setdefault(referrer_id, [])
-                if uid not in referrals[referrer_id]:
-                    referrals[referrer_id].append(uid)
-                await async_save_referrals()
-                logger.info(f"🔗 New referral: uid={uid} referred by uid={referrer_id}")
-                try:
-                    await context.bot.send_message(
-                        int(referrer_id),
-                        f"🎉 *New Referral!*\n\n"
-                        f"👤 *{user.first_name}* তোমার referral link দিয়ে join করেছে!\n"
-                        f"💸 তারা OTP থেকে earn করলে তুমি *{settings.get('referralCommission', 10)}%* commission পাবে।",
-                        parse_mode="Markdown"
-                    )
-                except:
-                    pass
+                users[uid]["referralVerified"] = False
+                logger.info(f"🔗 Referral pending verify: uid={uid} referred by uid={referrer_id}")
 
         await async_save_users()
 
@@ -1065,6 +1044,29 @@ async def cb_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sess["is_admin"] = True
         if uid in users:
             users[uid]["verified"] = True
+
+            # ── Referral: শুধু প্রথমবার verify হলে count করো ──
+            if not users[uid].get("referralVerified", False):
+                referrer_id = users[uid].get("referredBy")
+                if referrer_id and referrer_id in users:
+                    users[uid]["referralVerified"] = True
+                    users[referrer_id]["referralCount"] = users[referrer_id].get("referralCount", 0) + 1
+                    referrals.setdefault(referrer_id, [])
+                    if uid not in referrals[referrer_id]:
+                        referrals[referrer_id].append(uid)
+                    await async_save_referrals()
+                    logger.info(f"✅ Referral confirmed: uid={uid} → referrer={referrer_id}")
+                    try:
+                        await context.bot.send_message(
+                            int(referrer_id),
+                            f"🎉 *New Referral Confirmed!*\n\n"
+                            f"👤 *{user.first_name}* সব group join করে verified হয়েছে!\n"
+                            f"💸 তারা OTP থেকে earn করলে তুমি *{settings.get('referralCommission', 10)}%* commission পাবে।",
+                            parse_mode="Markdown"
+                        )
+                    except:
+                        pass
+
             await async_save_users()
 
         await query.edit_message_text("✅ *VERIFICATION SUCCESSFUL!*\n\nYou can now use all features.", parse_mode="Markdown")
@@ -1236,7 +1238,13 @@ async def cb_select_country(update: Update, context: ContextTypes.DEFAULT_TYPE):
             + ("\n📱=WA আছে ❌=নেই" if wa_connected else "")
         )
 
-    buttons = [
+    # ── প্রতিটা নম্বরের জন্য Copy button ──
+    copy_buttons = [
+        [InlineKeyboardButton(f"📋 Copy +{n}", callback_data=f"copy_num:{n}")]
+        for n in nums
+    ]
+
+    buttons = copy_buttons + [
         [InlineKeyboardButton("📨 Open OTP Group", url=OTP_GROUP, api_kwargs={"style": "primary"})],
         [InlineKeyboardButton("🔄 Get New Numbers", callback_data=f"newnum:{svc_id}:{cc}", api_kwargs={"style": "success"})],
         [InlineKeyboardButton("🔙 Service List", callback_data="back_services", api_kwargs={"style": "danger"})],
@@ -1316,7 +1324,13 @@ async def cb_new_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
             + ("\n📱=WA আছে ❌=নেই" if wa_connected else "")
         )
 
-    buttons = [
+    # ── প্রতিটা নম্বরের জন্য Copy button ──
+    copy_buttons_new = [
+        [InlineKeyboardButton(f"📋 Copy +{n}", callback_data=f"copy_num:{n}")]
+        for n in nums
+    ]
+
+    buttons = copy_buttons_new + [
         [InlineKeyboardButton("📨 Open OTP Group", url=OTP_GROUP, api_kwargs={"style": "primary"})],
         [InlineKeyboardButton("🔄 Get New Numbers", callback_data=f"newnum:{svc_id}:{cc}", api_kwargs={"style": "success"})],
         [InlineKeyboardButton("🔙 Service List", callback_data="back_services", api_kwargs={"style": "danger"})],
@@ -3111,6 +3125,83 @@ async def handle_otp_group_message(update: Update, context: ContextTypes.DEFAULT
     })
     await async_save_otp_log()
 
+# ─── Copy Number Handler ───
+async def cb_copy_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    number = query.data.split(":", 1)[1]
+    # নম্বরটা আলাদা message হিসেবে পাঠাও — সহজে copy করা যাবে
+    await query.answer(f"✅ নম্বর কপি করুন: +{number}", show_alert=True)
+    await context.bot.send_message(
+        query.from_user.id,
+        f"`+{number}`",
+        parse_mode="Markdown"
+    )
+
+# ─── Real-time Group Member Change Handler ───
+REQUIRED_GROUP_IDS = {MAIN_CHANNEL_ID, CHAT_GROUP_ID, OTP_GROUP_ID}
+
+async def handle_chat_member_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """কেউ group ছাড়লে বা join করলে real-time এ handle করো"""
+    try:
+        cm = update.chat_member
+        if not cm:
+            return
+
+        chat_id = cm.chat.id
+        if chat_id not in REQUIRED_GROUP_IDS:
+            return
+
+        user    = cm.new_chat_member.user
+        uid     = str(user.id)
+        old_status = cm.old_chat_member.status  # আগের status
+        new_status = cm.new_chat_member.status  # নতুন status
+
+        LEFT_STATUSES   = {"left", "kicked", "banned"}
+        JOINED_STATUSES = {"member", "administrator", "creator"}
+
+        # ── কেউ group ছেড়ে গেলে ──
+        if old_status in JOINED_STATUSES and new_status in LEFT_STATUSES:
+            logger.info(f"👋 User {uid} left chat {chat_id}")
+
+            if uid not in users:
+                return
+
+            # verified=False করো — referral ছাড়া user হলেও
+            users[uid]["verified"] = False
+            sess = get_session(uid)
+            sess["verified"] = False
+
+            # referral ছিল এবং confirmed ছিল → count কমাও
+            if users[uid].get("referralVerified", False):
+                users[uid]["referralVerified"] = False
+                referrer_id = users[uid].get("referredBy")
+                if referrer_id and referrer_id in users:
+                    users[referrer_id]["referralCount"] = max(0, users[referrer_id].get("referralCount", 0) - 1)
+                    if referrer_id in referrals and uid in referrals[referrer_id]:
+                        referrals[referrer_id].remove(uid)
+                    await async_save_referrals()
+                    logger.info(f"📉 Referral removed: uid={uid} left → referrer={referrer_id} count={users[referrer_id]['referralCount']}")
+                    try:
+                        await context.bot.send_message(
+                            int(referrer_id),
+                            f"⚠️ *Referral Lost!*\n\n"
+                            f"তোমার একজন referred user group ছেড়ে গেছে।\n"
+                            f"👥 Current Referrals: *{users[referrer_id]['referralCount']}*",
+                            parse_mode="Markdown"
+                        )
+                    except:
+                        pass
+
+            await async_save_users()
+            logger.info(f"🔒 Access revoked for uid={uid} (left chat {chat_id})")
+
+        # ── কেউ আবার group এ join করলে — শুধু log করো, verify এ count হবে ──
+        elif old_status in LEFT_STATUSES and new_status in JOINED_STATUSES:
+            logger.info(f"✅ User {uid} joined chat {chat_id}")
+
+    except Exception as e:
+        logger.error(f"handle_chat_member_update error: {e}")
+
 # ─── /cancel command ───
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid  = str(update.effective_user.id)
@@ -3124,7 +3215,7 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── Periodic scheduled check ───
 async def scheduled_membership_check(app):
     while True:
-        await asyncio.sleep(2 * 3600)
+        await asyncio.sleep(30 * 60)  # ৩০ মিনিট পর পর background check
         if not settings.get("requireVerification", True):
             continue
         logger.info(f"🔄 [Scheduled] Checking {len(users)} users...")
@@ -3137,6 +3228,30 @@ async def scheduled_membership_check(app):
                     blocked += 1
                     sess = get_session(uid)
                     sess["verified"] = False
+
+                    # ── রেফার কাউন্ট কমাও যদি আগে verified ছিল ──
+                    if users[uid].get("referralVerified", False):
+                        users[uid]["referralVerified"] = False
+                        referrer_id = users[uid].get("referredBy")
+                        if referrer_id and referrer_id in users:
+                            current_count = users[referrer_id].get("referralCount", 0)
+                            users[referrer_id]["referralCount"] = max(0, current_count - 1)
+                            # referrals list থেকেও সরাও
+                            if referrer_id in referrals and uid in referrals[referrer_id]:
+                                referrals[referrer_id].remove(uid)
+                            await async_save_referrals()
+                            logger.info(f"📉 Referral removed: uid={uid} left group → referrer={referrer_id} count={users[referrer_id]['referralCount']}")
+                            try:
+                                await app.bot.send_message(
+                                    int(referrer_id),
+                                    f"⚠️ *Referral Lost!*\n\n"
+                                    f"তোমার একজন referred user group ছেড়ে গেছে।\n"
+                                    f"👥 Current Referrals: *{users[referrer_id]['referralCount']}*",
+                                    parse_mode="Markdown"
+                                )
+                            except:
+                                pass
+
                     try:
                         await app.bot.send_message(int(uid),
                             "⛔ *Access Blocked!*\n\nYou left a required group.",
@@ -3173,6 +3288,7 @@ def main():
     app.add_handler(CallbackQueryHandler(cb_verify, pattern="^verify_user$"))
     app.add_handler(CallbackQueryHandler(cb_select_service, pattern="^svc:"))
     app.add_handler(CallbackQueryHandler(cb_select_country, pattern="^cc:"))
+    app.add_handler(CallbackQueryHandler(cb_copy_number, pattern="^copy_num:"))
     app.add_handler(CallbackQueryHandler(cb_new_numbers, pattern="^newnum:"))
     app.add_handler(CallbackQueryHandler(cb_back_services, pattern="^back_services$"))
 
@@ -3238,6 +3354,10 @@ def main():
 
     app.add_handler(MessageHandler(filters.Chat(OTP_GROUP_ID) & ~filters.COMMAND, handle_otp_group_message))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_text))
+
+    # ── Real-time group member change (leave/join) ──
+    from telegram.ext import ChatMemberHandler
+    app.add_handler(ChatMemberHandler(handle_chat_member_update, ChatMemberHandler.CHAT_MEMBER))
 
     async def post_init(application):
         global _tg_app
