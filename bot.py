@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pyotp
 from aiohttp import web as aio_web
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, CopyTextButton
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     filters, ContextTypes, ConversationHandler
@@ -30,16 +30,16 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 # ─── Configuration ───
-BOT_TOKEN = "8739818208:AAGc10CkvGFnfPqYukwT7mPhy3iGj7WNpGc"
+BOT_TOKEN = "8673568842:AAF6vu1PDsLVbN5ljhISEJ95FBbC7344MyA"
 ADMIN_PASSWORD = "Earnmaster"
 
-MAIN_CHANNEL     = "@+QylG3hEY19c1Y2Y0"
-MAIN_CHANNEL_URL = "https://t.me/+ejnPW9QGW9s0NDc0"
-MAIN_CHANNEL_ID  = -1001579502447
-CHAT_GROUP       = "https://t.me/+RmiAXvgxUtw3ZTU1"
-CHAT_GROUP_ID    = -1003672144557
-OTP_GROUP        = "https://t.me/+_LAWl3HB98NmZTRl"
-OTP_GROUP_ID     = -1003774165897
+MAIN_CHANNEL     = "@earning_hub_official_channel"
+MAIN_CHANNEL_URL = "https://t.me/earning_hub_official_channel"
+MAIN_CHANNEL_ID  = -1003543718769
+CHAT_GROUP       = "https://t.me/earning_hub_number_channel"
+CHAT_GROUP_ID    = -1003875142184
+OTP_GROUP        = "https://t.me/EarningHub_otp"
+OTP_GROUP_ID     = -1003247504066
 
 # ─── Baileys API (WhatsApp) ───
 BAILEYS_URL = os.environ.get("BAILEYS_URL", "http://localhost:3000")
@@ -74,7 +74,7 @@ DEFAULT_SETTINGS = {
     "defaultOtpPrice": 0.25,
     "withdrawMethods": ["bKash", "Nagad"],
     "withdrawEnabled": True,
-    "referralCommission": 10,
+    "referralCommission": 10,   # % commission for referrer
 }
 
 # ─── Load/Save Helpers ───
@@ -96,6 +96,7 @@ def save_json(path, data):
 
 # ─── Load Data ───
 settings       = load_json(SETTINGS_FILE, DEFAULT_SETTINGS)
+# Ensure referralCommission key exists in loaded settings
 if "referralCommission" not in settings:
     settings["referralCommission"] = 10
 
@@ -108,11 +109,12 @@ temp_mails     = load_json(TEMP_MAILS_FILE, {})
 earnings       = load_json(EARNINGS_FILE, {})
 withdrawals    = load_json(WITHDRAW_FILE, [])
 country_prices = load_json(COUNTRY_PRICES_FILE, {})
-referrals      = load_json(REFERRALS_FILE, {})
-wa_sessions    = {}
-_tg_app        = None
+referrals      = load_json(REFERRALS_FILE, {})   # { referrer_uid: [referred_uid, ...] }
+wa_sessions    = {}  # { user_id: { connected: bool } }
+_tg_app        = None  # HTTP server এর জন্য global app reference
 
 countries = load_json(COUNTRIES_FILE, {
+    # ── South Asia ──
     "880": {"name": "Bangladesh",   "flag": "🇧🇩"},
     "91":  {"name": "India",        "flag": "🇮🇳"},
     "92":  {"name": "Pakistan",     "flag": "🇵🇰"},
@@ -121,6 +123,7 @@ countries = load_json(COUNTRIES_FILE, {
     "95":  {"name": "Myanmar",      "flag": "🇲🇲"},
     "975": {"name": "Bhutan",       "flag": "🇧🇹"},
     "960": {"name": "Maldives",     "flag": "🇲🇻"},
+    # ── Southeast Asia ──
     "66":  {"name": "Thailand",     "flag": "🇹🇭"},
     "84":  {"name": "Vietnam",      "flag": "🇻🇳"},
     "62":  {"name": "Indonesia",    "flag": "🇮🇩"},
@@ -131,6 +134,7 @@ countries = load_json(COUNTRIES_FILE, {
     "856": {"name": "Laos",         "flag": "🇱🇦"},
     "673": {"name": "Brunei",       "flag": "🇧🇳"},
     "670": {"name": "Timor-Leste",  "flag": "🇹🇱"},
+    # ── East Asia ──
     "86":  {"name": "China",        "flag": "🇨🇳"},
     "81":  {"name": "Japan",        "flag": "🇯🇵"},
     "82":  {"name": "South Korea",  "flag": "🇰🇷"},
@@ -139,12 +143,14 @@ countries = load_json(COUNTRIES_FILE, {
     "853": {"name": "Macau",        "flag": "🇲🇴"},
     "976": {"name": "Mongolia",     "flag": "🇲🇳"},
     "850": {"name": "North Korea",  "flag": "🇰🇵"},
+    # ── Central Asia ──
     "7":   {"name": "Russia",       "flag": "🇷🇺"},
     "996": {"name": "Kyrgyzstan",   "flag": "🇰🇬"},
     "992": {"name": "Tajikistan",   "flag": "🇹🇯"},
     "993": {"name": "Turkmenistan", "flag": "🇹🇲"},
     "998": {"name": "Uzbekistan",   "flag": "🇺🇿"},
     "7778":{"name": "Kazakhstan",   "flag": "🇰🇿"},
+    # ── Middle East ──
     "93":  {"name": "Afghanistan",  "flag": "🇦🇫"},
     "98":  {"name": "Iran",         "flag": "🇮🇷"},
     "964": {"name": "Iraq",         "flag": "🇮🇶"},
@@ -163,6 +169,7 @@ countries = load_json(COUNTRIES_FILE, {
     "994": {"name": "Azerbaijan",   "flag": "🇦🇿"},
     "374": {"name": "Armenia",      "flag": "🇦🇲"},
     "995": {"name": "Georgia",      "flag": "🇬🇪"},
+    # ── Western Europe ──
     "44":  {"name": "UK",           "flag": "🇬🇧"},
     "49":  {"name": "Germany",      "flag": "🇩🇪"},
     "33":  {"name": "France",       "flag": "🇫🇷"},
@@ -177,6 +184,7 @@ countries = load_json(COUNTRIES_FILE, {
     "352": {"name": "Luxembourg",   "flag": "🇱🇺"},
     "356": {"name": "Malta",        "flag": "🇲🇹"},
     "357": {"name": "Cyprus",       "flag": "🇨🇾"},
+    # ── Northern Europe ──
     "45":  {"name": "Denmark",      "flag": "🇩🇰"},
     "46":  {"name": "Sweden",       "flag": "🇸🇪"},
     "47":  {"name": "Norway",       "flag": "🇳🇴"},
@@ -185,6 +193,7 @@ countries = load_json(COUNTRIES_FILE, {
     "370": {"name": "Lithuania",    "flag": "🇱🇹"},
     "371": {"name": "Latvia",       "flag": "🇱🇻"},
     "372": {"name": "Estonia",      "flag": "🇪🇪"},
+    # ── Southern/Eastern Europe ──
     "30":  {"name": "Greece",       "flag": "🇬🇷"},
     "48":  {"name": "Poland",       "flag": "🇵🇱"},
     "420": {"name": "Czech Rep.",   "flag": "🇨🇿"},
@@ -203,8 +212,10 @@ countries = load_json(COUNTRIES_FILE, {
     "380": {"name": "Ukraine",      "flag": "🇺🇦"},
     "375": {"name": "Belarus",      "flag": "🇧🇾"},
     "383": {"name": "Kosovo",       "flag": "🇽🇰"},
+    # ── North America ──
     "1":   {"name": "USA/Canada",   "flag": "🇺🇸"},
     "52":  {"name": "Mexico",       "flag": "🇲🇽"},
+    # ── Central America & Caribbean ──
     "506": {"name": "Costa Rica",   "flag": "🇨🇷"},
     "502": {"name": "Guatemala",    "flag": "🇬🇹"},
     "504": {"name": "Honduras",     "flag": "🇭🇳"},
@@ -214,6 +225,7 @@ countries = load_json(COUNTRIES_FILE, {
     "53":  {"name": "Cuba",         "flag": "🇨🇺"},
     "509": {"name": "Haiti",        "flag": "🇭🇹"},
     "501": {"name": "Belize",       "flag": "🇧🇿"},
+    # ── South America ──
     "55":  {"name": "Brazil",       "flag": "🇧🇷"},
     "54":  {"name": "Argentina",    "flag": "🇦🇷"},
     "56":  {"name": "Chile",        "flag": "🇨🇱"},
@@ -226,12 +238,14 @@ countries = load_json(COUNTRIES_FILE, {
     "598": {"name": "Uruguay",      "flag": "🇺🇾"},
     "592": {"name": "Guyana",       "flag": "🇬🇾"},
     "597": {"name": "Suriname",     "flag": "🇸🇷"},
+    # ── North Africa ──
     "20":  {"name": "Egypt",        "flag": "🇪🇬"},
     "213": {"name": "Algeria",      "flag": "🇩🇿"},
     "212": {"name": "Morocco",      "flag": "🇲🇦"},
     "216": {"name": "Tunisia",      "flag": "🇹🇳"},
     "218": {"name": "Libya",        "flag": "🇱🇾"},
     "249": {"name": "Sudan",        "flag": "🇸🇩"},
+    # ── West Africa ──
     "234": {"name": "Nigeria",      "flag": "🇳🇬"},
     "233": {"name": "Ghana",        "flag": "🇬🇭"},
     "221": {"name": "Senegal",      "flag": "🇸🇳"},
@@ -247,6 +261,7 @@ countries = load_json(COUNTRIES_FILE, {
     "224": {"name": "Guinea",       "flag": "🇬🇳"},
     "245": {"name": "Guinea-Bissau","flag": "🇬🇼"},
     "238": {"name": "Cape Verde",   "flag": "🇨🇻"},
+    # ── Central Africa ──
     "237": {"name": "Cameroon",     "flag": "🇨🇲"},
     "243": {"name": "DR Congo",     "flag": "🇨🇩"},
     "242": {"name": "Congo",        "flag": "🇨🇬"},
@@ -254,6 +269,7 @@ countries = load_json(COUNTRIES_FILE, {
     "241": {"name": "Gabon",        "flag": "🇬🇦"},
     "236": {"name": "CAR",          "flag": "🇨🇫"},
     "235": {"name": "Chad",         "flag": "🇹🇩"},
+    # ── East Africa ──
     "254": {"name": "Kenya",        "flag": "🇰🇪"},
     "255": {"name": "Tanzania",     "flag": "🇹🇿"},
     "256": {"name": "Uganda",       "flag": "🇺🇬"},
@@ -263,6 +279,7 @@ countries = load_json(COUNTRIES_FILE, {
     "257": {"name": "Burundi",      "flag": "🇧🇮"},
     "250": {"name": "Rwanda",       "flag": "🇷🇼"},
     "291": {"name": "Eritrea",      "flag": "🇪🇷"},
+    # ── Southern Africa ──
     "27":  {"name": "South Africa", "flag": "🇿🇦"},
     "258": {"name": "Mozambique",   "flag": "🇲🇿"},
     "260": {"name": "Zambia",       "flag": "🇿🇲"},
@@ -275,6 +292,7 @@ countries = load_json(COUNTRIES_FILE, {
     "261": {"name": "Madagascar",   "flag": "🇲🇬"},
     "230": {"name": "Mauritius",    "flag": "🇲🇺"},
     "248": {"name": "Seychelles",   "flag": "🇸🇨"},
+    # ── Oceania ──
     "61":  {"name": "Australia",    "flag": "🇦🇺"},
     "64":  {"name": "New Zealand",  "flag": "🇳🇿"},
     "679": {"name": "Fiji",         "flag": "🇫🇯"},
@@ -300,7 +318,7 @@ services = load_json(SERVICES_FILE, {
     "other":       {"name": "Other",       "icon": "🔧"},
 })
 
-numbers_by_cs = {}
+numbers_by_cs = {}  # { country_code: { service: [numbers] } }
 
 def load_numbers():
     global numbers_by_cs
@@ -351,9 +369,11 @@ def save_numbers():
 
 load_numbers()
 
+# ─── Save Functions ───
 def save_settings():    save_json(SETTINGS_FILE, settings)
 def save_referrals():   save_json(REFERRALS_FILE, referrals)
 
+# ─── Safe Edit Helper ───
 async def safe_edit(query, text, **kwargs):
     try:
         await query.edit_message_text(text, **kwargs)
@@ -363,6 +383,7 @@ async def safe_edit(query, text, **kwargs):
         else:
             raise
 
+# ─── Async Save Helpers ───
 async def async_save_numbers():
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, save_numbers)
@@ -410,6 +431,7 @@ if not os.path.exists(COUNTRIES_FILE):
 if not os.path.exists(SERVICES_FILE):
     save_services()
 
+# ─── Helper Functions ───
 def is_admin(user_id: str) -> bool:
     return str(user_id) in admins
 
@@ -440,6 +462,10 @@ def get_referral_link(uid: str, bot_username: str) -> str:
     return f"https://t.me/{bot_username}?start=ref_{uid}"
 
 async def add_earning(uid: str, cc: str) -> float:
+    """
+    Add OTP earning to user. If user was referred, give commission to referrer.
+    Returns the earned amount (not including commission).
+    """
     uid = str(uid)
     price = get_otp_price(cc)
     e = get_user_earnings(uid)
@@ -447,6 +473,7 @@ async def add_earning(uid: str, cc: str) -> float:
     e["totalEarned"] = round(e["totalEarned"] + price, 2)
     e["otpCount"]    = e.get("otpCount", 0) + 1
 
+    # ── Referral Commission ──
     referrer_id = users.get(uid, {}).get("referredBy")
     if referrer_id and str(referrer_id) != uid:
         commission_pct = settings.get("referralCommission", 10) / 100
@@ -905,21 +932,21 @@ def verify_keyboard():
 
 def admin_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Stock Report", callback_data="admin_stock", api_kwargs={"style": "primary"}),
-         InlineKeyboardButton("👥 User Stats", callback_data="admin_users", api_kwargs={"style": "success"})],
-        [InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast", api_kwargs={"style": "danger"}),
-         InlineKeyboardButton("📋 OTP Log", callback_data="admin_otp_log", api_kwargs={"style": "primary"})],
-        [InlineKeyboardButton("➕ Add Numbers", callback_data="admin_add_numbers", api_kwargs={"style": "success"}),
-         InlineKeyboardButton("📤 Upload File", callback_data="admin_upload", api_kwargs={"style": "danger"})],
-        [InlineKeyboardButton("🗑️ Delete Numbers", callback_data="admin_delete", api_kwargs={"style": "primary"}),
-         InlineKeyboardButton("🔧 Manage Services", callback_data="admin_manage_services", api_kwargs={"style": "success"})],
-        [InlineKeyboardButton("🌍 Manage Countries", callback_data="admin_manage_countries", api_kwargs={"style": "danger"}),
-         InlineKeyboardButton("⚙️ Settings", callback_data="admin_settings", api_kwargs={"style": "primary"})],
-        [InlineKeyboardButton("💰 Country Prices", callback_data="admin_country_prices", api_kwargs={"style": "success"}),
-         InlineKeyboardButton("💸 Withdrawals", callback_data="admin_withdrawals", api_kwargs={"style": "danger"})],
-        [InlineKeyboardButton("👛 Balance Management", callback_data="admin_balance_manage", api_kwargs={"style": "primary"}),
-         InlineKeyboardButton("👥 Referral Stats", callback_data="admin_referral_stats", api_kwargs={"style": "success"})],
-        [InlineKeyboardButton("🚪 Logout", callback_data="admin_logout", api_kwargs={"style": "danger"})],
+        [InlineKeyboardButton("📊 Stock Report", callback_data="admin_stock", api_kwargs={"style": "success"}),
+         InlineKeyboardButton("👥 User Stats", callback_data="admin_users", api_kwargs={"style": "danger"})],
+        [InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast", api_kwargs={"style": "primary"}),
+         InlineKeyboardButton("📋 OTP Log", callback_data="admin_otp_log", api_kwargs={"style": "success"})],
+        [InlineKeyboardButton("➕ Add Numbers", callback_data="admin_add_numbers", api_kwargs={"style": "danger"}),
+         InlineKeyboardButton("📤 Upload File", callback_data="admin_upload", api_kwargs={"style": "primary"})],
+        [InlineKeyboardButton("🗑️ Delete Numbers", callback_data="admin_delete", api_kwargs={"style": "success"}),
+         InlineKeyboardButton("🔧 Manage Services", callback_data="admin_manage_services", api_kwargs={"style": "danger"})],
+        [InlineKeyboardButton("🌍 Manage Countries", callback_data="admin_manage_countries", api_kwargs={"style": "primary"}),
+         InlineKeyboardButton("⚙️ Settings", callback_data="admin_settings", api_kwargs={"style": "success"})],
+        [InlineKeyboardButton("💰 Country Prices", callback_data="admin_country_prices", api_kwargs={"style": "danger"}),
+         InlineKeyboardButton("💸 Withdrawals", callback_data="admin_withdrawals", api_kwargs={"style": "primary"})],
+        [InlineKeyboardButton("👛 Balance Management", callback_data="admin_balance_manage", api_kwargs={"style": "success"}),
+         InlineKeyboardButton("👥 Referral Stats", callback_data="admin_referral_stats", api_kwargs={"style": "danger"})],
+        [InlineKeyboardButton("🚪 Logout", callback_data="admin_logout", api_kwargs={"style": "primary"})],
     ])
 
 # ─── User Session State ───
@@ -942,20 +969,28 @@ async def ensure_verified(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     uid  = str(user.id)
     sess = get_session(uid)
 
-    # Admin সবসময় pass
     if sess["is_admin"] or is_admin(uid):
         sess["is_admin"] = True
         return True
 
-    # Verification বন্ধ থাকলে pass
     if not settings.get("requireVerification", True):
         return True
 
-    # Local flag চেক — chat_member handler real-time এ update করে
-    if sess.get("verified") or users.get(uid, {}).get("verified", False):
+    now = time.time()
+    RECHECK = 2 * 3600
+    if sess["verified"] and (now - sess["last_verification_check"]) < RECHECK:
         return True
 
-    # Verified না — rejoin করতে বলো, block না
+    membership = await check_membership(user.id, context.application)
+    if membership["allJoined"]:
+        sess["verified"] = True
+        sess["last_verification_check"] = now
+        if uid in users:
+            users[uid]["verified"] = True
+            await async_save_users()
+        return True
+
+    sess["verified"] = False
     msg = (
         "⚠️ *Bot ব্যবহার করতে সকল গ্রুপে join করতে হবে!*\n\n"
         "নিচের সবগুলোতে join করুন, তারপর VERIFY চাপুন:"
@@ -975,6 +1010,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         user = update.effective_user
         uid  = str(user.id)
+        is_new = uid not in users
 
         if uid not in users:
             users[uid] = {
@@ -988,15 +1024,33 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "referralCount": 0,
             }
 
+        # ── Referral deep-link handling ──
         if context.args and context.args[0].startswith("ref_"):
             referrer_id = context.args[0][4:]
-            # শুধু referredBy সেট করো — verify সফল হওয়ার আগে count হবে না
+            # Only process if: new user, not self-referral, not already referred
             if (referrer_id != uid
                     and not users[uid].get("referredBy")
                     and referrer_id in users):
                 users[uid]["referredBy"] = referrer_id
-                users[uid]["referralVerified"] = False
-                logger.info(f"🔗 Referral pending verify: uid={uid} referred by uid={referrer_id}")
+                # Increment referrer's referral count
+                users[referrer_id]["referralCount"] = users[referrer_id].get("referralCount", 0) + 1
+                # Track in referrals dict
+                referrals.setdefault(referrer_id, [])
+                if uid not in referrals[referrer_id]:
+                    referrals[referrer_id].append(uid)
+                await async_save_referrals()
+                logger.info(f"🔗 New referral: uid={uid} referred by uid={referrer_id}")
+                # Notify referrer
+                try:
+                    await context.bot.send_message(
+                        int(referrer_id),
+                        f"🎉 *New Referral!*\n\n"
+                        f"👤 *{user.first_name}* তোমার referral link দিয়ে join করেছে!\n"
+                        f"💸 তারা OTP থেকে earn করলে তুমি *{settings.get('referralCommission', 10)}%* commission পাবে।",
+                        parse_mode="Markdown"
+                    )
+                except:
+                    pass
 
         await async_save_users()
 
@@ -1044,29 +1098,6 @@ async def cb_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sess["is_admin"] = True
         if uid in users:
             users[uid]["verified"] = True
-
-            # ── Referral: শুধু প্রথমবার verify হলে count করো ──
-            if not users[uid].get("referralVerified", False):
-                referrer_id = users[uid].get("referredBy")
-                if referrer_id and referrer_id in users:
-                    users[uid]["referralVerified"] = True
-                    users[referrer_id]["referralCount"] = users[referrer_id].get("referralCount", 0) + 1
-                    referrals.setdefault(referrer_id, [])
-                    if uid not in referrals[referrer_id]:
-                        referrals[referrer_id].append(uid)
-                    await async_save_referrals()
-                    logger.info(f"✅ Referral confirmed: uid={uid} → referrer={referrer_id}")
-                    try:
-                        await context.bot.send_message(
-                            int(referrer_id),
-                            f"🎉 *New Referral Confirmed!*\n\n"
-                            f"👤 *{user.first_name}* সব group join করে verified হয়েছে!\n"
-                            f"💸 তারা OTP থেকে earn করলে তুমি *{settings.get('referralCommission', 10)}%* commission পাবে।",
-                            parse_mode="Markdown"
-                        )
-                    except:
-                        pass
-
             await async_save_users()
 
         await query.edit_message_text("✅ *VERIFICATION SUCCESSFUL!*\n\nYou can now use all features.", parse_mode="Markdown")
@@ -1127,20 +1158,22 @@ async def handle_get_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not avail:
         return await update.message.reply_text("📭 *No Numbers Available*\n\nPlease try again later.", parse_mode="Markdown")
 
-    # ── 3-color cycle for service buttons ──
-    _svc_colors = ["primary", "success", "danger"]
+    _svc_styles = ["primary", "success", "danger"]
     buttons = []
+    _svc_idx = 0
     for i in range(0, len(avail), 2):
         row = []
         row.append(InlineKeyboardButton(
             f"{avail[i][1]['icon']} {avail[i][1]['name']} ({avail[i][2]})",
-            callback_data=f"svc:{avail[i][0]}", api_kwargs={"style": _svc_colors[i % 3]}
+            callback_data=f"svc:{avail[i][0]}", api_kwargs={"style": _svc_styles[_svc_idx % 3]}
         ))
+        _svc_idx += 1
         if i+1 < len(avail):
             row.append(InlineKeyboardButton(
                 f"{avail[i+1][1]['icon']} {avail[i+1][1]['name']} ({avail[i+1][2]})",
-                callback_data=f"svc:{avail[i+1][0]}", api_kwargs={"style": _svc_colors[(i+1) % 3]}
+                callback_data=f"svc:{avail[i+1][0]}", api_kwargs={"style": _svc_styles[_svc_idx % 3]}
             ))
+            _svc_idx += 1
         buttons.append(row)
 
     await update.message.reply_text(
@@ -1149,7 +1182,6 @@ async def handle_get_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE)
         reply_markup=InlineKeyboardMarkup(buttons)
     )
 
-# ─── cb_select_service — 3-COLOR FIX ───
 async def cb_select_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not await ensure_verified(update, context):
@@ -1162,24 +1194,18 @@ async def cb_select_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not ccs:
         return await query.answer("❌ No numbers available", show_alert=True)
 
-    # ── 3-color cycle: primary=blue, success=green, danger=red ──
-    _cc_colors = ["primary", "success", "danger"]
+    _cc_styles = ["primary", "success", "danger"]
     buttons = []
+    _cc_idx = 0
     for i in range(0, len(ccs), 2):
         row = []
         cc1 = ccs[i]; c1 = countries[cc1]; p1 = get_otp_price(cc1)
-        row.append(InlineKeyboardButton(
-            f"{c1['flag']} {c1['name']} ({p1:.2f}TK)",
-            callback_data=f"cc:{svc_id}:{cc1}",
-            api_kwargs={"style": _cc_colors[i % 3]}
-        ))
+        row.append(InlineKeyboardButton(f"{c1['flag']} {c1['name']} ({p1:.2f}TK)", callback_data=f"cc:{svc_id}:{cc1}", api_kwargs={"style": _cc_styles[_cc_idx % 3]}))
+        _cc_idx += 1
         if i+1 < len(ccs):
             cc2 = ccs[i+1]; c2 = countries[cc2]; p2 = get_otp_price(cc2)
-            row.append(InlineKeyboardButton(
-                f"{c2['flag']} {c2['name']} ({p2:.2f}TK)",
-                callback_data=f"cc:{svc_id}:{cc2}",
-                api_kwargs={"style": _cc_colors[(i+1) % 3]}
-            ))
+            row.append(InlineKeyboardButton(f"{c2['flag']} {c2['name']} ({p2:.2f}TK)", callback_data=f"cc:{svc_id}:{cc2}", api_kwargs={"style": _cc_styles[_cc_idx % 3]}))
+            _cc_idx += 1
         buttons.append(row)
     buttons.append([InlineKeyboardButton("🔙 Back", callback_data="back_services", api_kwargs={"style": "danger"})])
 
@@ -1223,53 +1249,41 @@ async def cb_select_country(update: Update, context: ContextTypes.DEFAULT_TYPE):
     price   = get_otp_price(cc)
     wa_connected = wa_sessions.get(uid, {}).get("connected", False)
 
-    def make_msg():
-        return (
-            f"✅ *{len(nums)} Number(s) Assigned!*\n\n"
-            f"{svc['icon']} *Service:* {svc['name']}\n"
-            f"{country['flag']} *Country:* {country['name']}\n"
-            f"💵 *Earnings per OTP:* {price:.2f} taka\n\n"
-            f"📌 OTP automatically আসবে।"
-        )
+    _copy_styles = ["success", "primary", "danger"]
 
-    # ── Copy buttons — ২টা করে এক row ──
-    from telegram import CopyTextButton
-
-    def make_copy_buttons(wa_result=None):
-        rows = []
-        for i in range(0, len(nums), 2):
-            n1 = nums[i]
-            if wa_result:
-                icon1 = "📱" if wa_result.get(n1) is True else ("❌" if wa_result.get(n1) is False else "⬜")
+    def build_copy_buttons(num_list, wa_res=None):
+        btns = []
+        for _ci, n in enumerate(num_list):
+            if wa_res is not None:
+                wa_icon = " 📱" if wa_res.get(n) is True else (" ❌" if wa_res.get(n) is False else " ⬜")
             else:
-                icon1 = "⏳" if wa_connected else "📋"
-            row = [InlineKeyboardButton(
-                text=f"{icon1} +{n1}",
-                copy_text=CopyTextButton(text=f"+{n1}")
-            )]
-            if i + 1 < len(nums):
-                n2 = nums[i+1]
-                if wa_result:
-                    icon2 = "📱" if wa_result.get(n2) is True else ("❌" if wa_result.get(n2) is False else "⬜")
-                else:
-                    icon2 = "⏳" if wa_connected else "📋"
-                row.append(InlineKeyboardButton(
-                    text=f"{icon2} +{n2}",
-                    copy_text=CopyTextButton(text=f"+{n2}")
-                ))
-            rows.append(row)
-        return rows
+                wa_icon = " ⏳" if wa_connected else ""
+            btns.append([InlineKeyboardButton(
+                text="📋 +" + str(n) + wa_icon,
+                copy_text=CopyTextButton(text="+" + str(n)),
+                api_kwargs={"style": _copy_styles[_ci % 3]}
+            )])
+        return btns
 
-    bottom_buttons = [
+    msg_header = (
+        "*✅ " + str(len(nums)) + " Number(s) Assigned!*\n\n"
+        + svc['icon'] + " *Service:* " + svc['name'] + "\n"
+        + country['flag'] + " *Country:* " + country['name'] + "\n"
+        + "💵 *Earnings per OTP:* " + str(round(price, 2)) + " taka\n\n"
+        + "📌 নাম্বার বাটনে ক্লিক করলে copy হবে।"
+        + ("\n📱=WA আছে ❌=নেই" if wa_connected else "")
+    )
+
+    action_btns = [
         [InlineKeyboardButton("📨 Open OTP Group", url=OTP_GROUP, api_kwargs={"style": "primary"})],
-        [InlineKeyboardButton("🔄 Get New Numbers", callback_data=f"newnum:{svc_id}:{cc}", api_kwargs={"style": "success"})],
+        [InlineKeyboardButton("🔄 Get New Numbers", callback_data="newnum:" + svc_id + ":" + cc, api_kwargs={"style": "success"})],
         [InlineKeyboardButton("🔙 Service List", callback_data="back_services", api_kwargs={"style": "danger"})],
     ]
     if not wa_connected:
-        bottom_buttons.append([InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect", api_kwargs={"style": "primary"})])
+        action_btns.append([InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect", api_kwargs={"style": "primary"})])
 
-    buttons = make_copy_buttons() + bottom_buttons
-    await query.edit_message_text(make_msg(), parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
+    buttons = build_copy_buttons(nums) + action_btns
+    await query.edit_message_text(msg_header, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
 
     if wa_connected:
         chat_id = query.message.chat_id
@@ -1281,14 +1295,13 @@ async def cb_select_country(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             res = {n: (r if not isinstance(r, Exception) else None)
                    for n, r in zip(nums, results)}
+            updated_btns = build_copy_buttons(nums, wa_res=res) + action_btns
             try:
                 await context.bot.edit_message_text(
-                    make_msg(), chat_id=chat_id, message_id=msg_id,
-                    parse_mode="Markdown",
-                    reply_markup=InlineKeyboardMarkup(make_copy_buttons(res) + bottom_buttons)
+                    msg_header, chat_id=chat_id, message_id=msg_id,
+                    parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(updated_btns)
                 )
             except: pass
-        asyncio.create_task(do_wa_check())
         asyncio.create_task(do_wa_check())
 
 async def cb_new_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1323,52 +1336,31 @@ async def cb_new_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     price   = get_otp_price(cc)
     wa_connected = wa_sessions.get(uid, {}).get("connected", False)
 
-    def make_msg_new():
+    nums_text = "\n".join(
+        f"{i+1}. `+{n}`" + (" ⏳" if wa_connected else "")
+        for i, n in enumerate(nums)
+    )
+
+    def make_msg_new(nt):
         return (
             f"🔄 *{len(nums)} New Number(s)!*\n\n"
             f"{svc['icon']} *Service:* {svc['name']}\n"
             f"{country['flag']} *Country:* {country['name']}\n"
             f"💵 *Earnings per OTP:* {price:.2f} taka\n\n"
+            f"📞 *Numbers:*\n{nt}\n\n"
             f"📌 OTP automatically আসবে।"
+            + ("\n📱=WA আছে ❌=নেই" if wa_connected else "")
         )
 
-    from telegram import CopyTextButton
-
-    def make_copy_buttons_new(wa_result=None):
-        rows = []
-        for i in range(0, len(nums), 2):
-            n1 = nums[i]
-            if wa_result:
-                icon1 = "📱" if wa_result.get(n1) is True else ("❌" if wa_result.get(n1) is False else "⬜")
-            else:
-                icon1 = "⏳" if wa_connected else "📋"
-            row = [InlineKeyboardButton(
-                text=f"{icon1} +{n1}",
-                copy_text=CopyTextButton(text=f"+{n1}")
-            )]
-            if i + 1 < len(nums):
-                n2 = nums[i+1]
-                if wa_result:
-                    icon2 = "📱" if wa_result.get(n2) is True else ("❌" if wa_result.get(n2) is False else "⬜")
-                else:
-                    icon2 = "⏳" if wa_connected else "📋"
-                row.append(InlineKeyboardButton(
-                    text=f"{icon2} +{n2}",
-                    copy_text=CopyTextButton(text=f"+{n2}")
-                ))
-            rows.append(row)
-        return rows
-
-    bottom_buttons_new = [
-        [InlineKeyboardButton("📨 Open OTP Group", url=OTP_GROUP, api_kwargs={"style": "primary"})],
-        [InlineKeyboardButton("🔄 Get New Numbers", callback_data=f"newnum:{svc_id}:{cc}", api_kwargs={"style": "success"})],
-        [InlineKeyboardButton("🔙 Service List", callback_data="back_services", api_kwargs={"style": "danger"})],
+    buttons = [
+        [InlineKeyboardButton("📨 Open OTP Group", url=OTP_GROUP, api_kwargs={"style": "success"})],
+        [InlineKeyboardButton("🔄 Get New Numbers", callback_data=f"newnum:{svc_id}:{cc}", api_kwargs={"style": "danger"})],
+        [InlineKeyboardButton("🔙 Service List", callback_data="back_services", api_kwargs={"style": "primary"})],
     ]
     if not wa_connected:
-        bottom_buttons_new.append([InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect", api_kwargs={"style": "primary"})])
+        buttons.append([InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect", api_kwargs={"style": "success"})])
 
-    buttons = make_copy_buttons_new() + bottom_buttons_new
-    await query.edit_message_text(make_msg_new(), parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
+    await query.edit_message_text(make_msg_new(nums_text), parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
 
     if wa_connected:
         chat_id = query.message.chat_id
@@ -1380,11 +1372,14 @@ async def cb_new_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             res = {n: (r if not isinstance(r, Exception) else None)
                    for n, r in zip(nums, results)}
+            updated = "\n".join(
+                f"{i+1}. `+{n}`" + (" 📱" if res.get(n) is True else (" ❌" if res.get(n) is False else " ⬜"))
+                for i, n in enumerate(nums)
+            )
             try:
                 await context.bot.edit_message_text(
-                    make_msg_new(), chat_id=chat_id, message_id=msg_id,
-                    parse_mode="Markdown",
-                    reply_markup=InlineKeyboardMarkup(make_copy_buttons_new(res) + bottom_buttons_new)
+                    make_msg_new(updated), chat_id=chat_id, message_id=msg_id,
+                    parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons)
                 )
             except: pass
         asyncio.create_task(do_wa_check_new())
@@ -1399,19 +1394,17 @@ async def cb_back_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
             total = sum(len(numbers_by_cs.get(cc, {}).get(svc_id, [])) for cc in ccs)
             avail.append((svc_id, svc, total))
 
-    # ── 3-color cycle ──
-    _svc_colors = ["primary", "success", "danger"]
     buttons = []
     for i in range(0, len(avail), 2):
         row = []
         row.append(InlineKeyboardButton(
             f"{avail[i][1]['icon']} {avail[i][1]['name']} ({avail[i][2]})",
-            callback_data=f"svc:{avail[i][0]}", api_kwargs={"style": _svc_colors[i % 3]}
+            callback_data=f"svc:{avail[i][0]}", api_kwargs={"style": "danger"}
         ))
         if i+1 < len(avail):
             row.append(InlineKeyboardButton(
                 f"{avail[i+1][1]['icon']} {avail[i+1][1]['name']} ({avail[i+1][2]})",
-                callback_data=f"svc:{avail[i+1][0]}", api_kwargs={"style": _svc_colors[(i+1) % 3]}
+                callback_data=f"svc:{avail[i+1][0]}", api_kwargs={"style": "primary"}
             ))
         buttons.append(row)
 
@@ -1443,8 +1436,8 @@ async def handle_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📌 *Minimum Withdraw:* {settings['minWithdraw']} taka",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("💸 Withdraw", callback_data="start_withdraw", api_kwargs={"style": "danger"})],
-            [InlineKeyboardButton("📋 Withdraw History", callback_data="withdraw_history", api_kwargs={"style": "primary"})],
+            [InlineKeyboardButton("💸 Withdraw", callback_data="start_withdraw", api_kwargs={"style": "success"})],
+            [InlineKeyboardButton("📋 Withdraw History", callback_data="withdraw_history", api_kwargs={"style": "danger"})],
         ])
     )
 
@@ -1458,6 +1451,7 @@ async def handle_referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ref_count = users.get(uid, {}).get("referralCount", 0)
     ref_earn  = get_user_earnings(uid).get("referralEarnings", 0)
 
+    # Build referred users list (last 5)
     referred_list = referrals.get(uid, [])
     referred_text = ""
     if referred_list:
@@ -1491,8 +1485,8 @@ async def handle_referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg,
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔗 Share Referral Link", url=f"https://t.me/share/url?url={urllib.parse.quote(ref_link)}&text={urllib.parse.quote(f'আমার referral link দিয়ে join করো এবং OTP থেকে আয় করো!')}", api_kwargs={"style": "success"})],
-            [InlineKeyboardButton("📊 Referral Stats", callback_data="ref_stats", api_kwargs={"style": "danger"})],
+            [InlineKeyboardButton("🔗 Share Referral Link", url=f"https://t.me/share/url?url={urllib.parse.quote(ref_link)}&text={urllib.parse.quote(f'আমার referral link দিয়ে join করো এবং OTP থেকে আয় করো!')}", api_kwargs={"style": "primary"})],
+            [InlineKeyboardButton("📊 Referral Stats", callback_data="ref_stats", api_kwargs={"style": "success"})],
         ])
     )
 
@@ -1533,8 +1527,8 @@ async def cb_ref_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         msg, parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔗 Share Link", url=f"https://t.me/share/url?url={urllib.parse.quote(ref_link)}", api_kwargs={"style": "primary"})],
-            [InlineKeyboardButton("🔙 Back", callback_data="goto_main", api_kwargs={"style": "success"})],
+            [InlineKeyboardButton("🔗 Share Link", url=f"https://t.me/share/url?url={urllib.parse.quote(ref_link)}", api_kwargs={"style": "danger"})],
+            [InlineKeyboardButton("🔙 Back", callback_data="goto_main", api_kwargs={"style": "primary"})],
         ])
     )
 
@@ -1561,9 +1555,9 @@ async def handle_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💸 *Withdraw*\n\n💵 Balance: *{e['balance']:.2f} taka*\n\nChoose method:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🟣 bKash", callback_data="wm:bKash", api_kwargs={"style": "danger"}),
-             InlineKeyboardButton("🟠 Nagad", callback_data="wm:Nagad", api_kwargs={"style": "primary"})],
-            [InlineKeyboardButton("❌ Cancel", callback_data="w_cancel", api_kwargs={"style": "success"})],
+            [InlineKeyboardButton("🟣 bKash", callback_data="wm:bKash", api_kwargs={"style": "success"}),
+             InlineKeyboardButton("🟠 Nagad", callback_data="wm:Nagad", api_kwargs={"style": "danger"})],
+            [InlineKeyboardButton("❌ Cancel", callback_data="w_cancel", api_kwargs={"style": "primary"})],
         ])
     )
 
@@ -1585,12 +1579,12 @@ async def cb_withdraw_method(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     rows = []
     for i in range(0, len(amounts), 2):
-        row = [InlineKeyboardButton(f"{amounts[i]} taka", callback_data=f"wa:{method}:{amounts[i]}", api_kwargs={"style": "primary"})]
+        row = [InlineKeyboardButton(f"{amounts[i]} taka", callback_data=f"wa:{method}:{amounts[i]}", api_kwargs={"style": "success"})]
         if i+1 < len(amounts):
-            row.append(InlineKeyboardButton(f"{amounts[i+1]} taka", callback_data=f"wa:{method}:{amounts[i+1]}", api_kwargs={"style": "success"}))
+            row.append(InlineKeyboardButton(f"{amounts[i+1]} taka", callback_data=f"wa:{method}:{amounts[i+1]}", api_kwargs={"style": "danger"}))
         rows.append(row)
-    rows.append([InlineKeyboardButton(f"💰 All ({e['balance']:.2f} taka)", callback_data=f"wa:{method}:{e['balance']:.2f}", api_kwargs={"style": "danger"})])
-    rows.append([InlineKeyboardButton("❌ Cancel", callback_data="w_cancel", api_kwargs={"style": "primary"})])
+    rows.append([InlineKeyboardButton(f"💰 All ({e['balance']:.2f} taka)", callback_data=f"wa:{method}:{e['balance']:.2f}", api_kwargs={"style": "primary"})])
+    rows.append([InlineKeyboardButton("❌ Cancel", callback_data="w_cancel", api_kwargs={"style": "success"})])
 
     icon = "🟣" if method == "bKash" else "🟠"
     await query.edit_message_text(
@@ -1620,7 +1614,7 @@ async def cb_withdraw_amount(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.edit_message_text(
         f"{icon} *{method} — {amount:.2f} taka*\n\n📱 Your *{method} number:*\nExample: `01712345678`",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="w_cancel", api_kwargs={"style": "success"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="w_cancel", api_kwargs={"style": "danger"})]])
     )
 
 async def cb_withdraw_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1649,7 +1643,7 @@ async def cb_withdraw_history(update: Update, context: ContextTypes.DEFAULT_TYPE
             text += f"📱 `{w['account']}` | {date}\n\n"
 
     await query.edit_message_text(text, parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="goto_main", api_kwargs={"style": "danger"})]]))
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="goto_main", api_kwargs={"style": "primary"})]]))
 
 async def cb_start_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1672,9 +1666,9 @@ async def cb_start_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💸 *Withdraw*\n\n💵 Balance: *{e['balance']:.2f} taka*\n\nChoose method:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🟣 bKash", callback_data="wm:bKash", api_kwargs={"style": "primary"}),
-             InlineKeyboardButton("🟠 Nagad", callback_data="wm:Nagad", api_kwargs={"style": "success"})],
-            [InlineKeyboardButton("❌ Cancel", callback_data="w_cancel", api_kwargs={"style": "danger"})],
+            [InlineKeyboardButton("🟣 bKash", callback_data="wm:bKash", api_kwargs={"style": "success"}),
+             InlineKeyboardButton("🟠 Nagad", callback_data="wm:Nagad", api_kwargs={"style": "danger"})],
+            [InlineKeyboardButton("❌ Cancel", callback_data="w_cancel", api_kwargs={"style": "primary"})],
         ])
     )
 
@@ -1691,8 +1685,8 @@ async def cb_wa_connect(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Disconnect করতে নিচের বাটন চাপো:",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔴 Logout / Disconnect", callback_data="wa_disconnect", api_kwargs={"style": "primary"})],
-                [InlineKeyboardButton("📊 Check Status", callback_data="wa_status", api_kwargs={"style": "success"})],
+                [InlineKeyboardButton("🔴 Logout / Disconnect", callback_data="wa_disconnect", api_kwargs={"style": "success"})],
+                [InlineKeyboardButton("📊 Check Status", callback_data="wa_status", api_kwargs={"style": "danger"})],
             ])
         )
         return
@@ -1725,8 +1719,8 @@ async def cb_wa_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "notAuthorized": "🔴 *WhatsApp connected নেই।*\n\nCode enter করলে আবার Check Status চাপো।",
     }
     text = STATE_MAP.get(state, f"❓ Unknown state: {state}")
-    btns = [[InlineKeyboardButton("🔴 Disconnect", callback_data="wa_disconnect", api_kwargs={"style": "danger"})]] if conn else \
-           [[InlineKeyboardButton("📱 Connect", callback_data="wa_connect", api_kwargs={"style": "primary"})]]
+    btns = [[InlineKeyboardButton("🔴 Disconnect", callback_data="wa_disconnect", api_kwargs={"style": "primary"})]] if conn else \
+           [[InlineKeyboardButton("📱 Connect", callback_data="wa_connect", api_kwargs={"style": "success"})]]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(btns))
 
 async def cb_wa_disconnect(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1749,7 +1743,7 @@ async def cb_wa_disconnect(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "আবার connect করতে নিচের বাটন চাপো:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect", api_kwargs={"style": "success"})],
+            [InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect", api_kwargs={"style": "danger"})],
         ])
     )
 
@@ -1766,17 +1760,17 @@ async def handle_tempmail(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📧 *Temporary Email*\n\n📌 Your email:\n`{existing['address']}`",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📬 Check Inbox", callback_data="tm_inbox", api_kwargs={"style": "danger"})],
-                [InlineKeyboardButton("📋 Show Email", callback_data="tm_show", api_kwargs={"style": "primary"})],
-                [InlineKeyboardButton("🔄 Get New Email", callback_data="tm_create", api_kwargs={"style": "success"})],
-                [InlineKeyboardButton("🗑️ Delete Email", callback_data="tm_delete", api_kwargs={"style": "danger"})],
+                [InlineKeyboardButton("📬 Check Inbox", callback_data="tm_inbox", api_kwargs={"style": "primary"})],
+                [InlineKeyboardButton("📋 Show Email", callback_data="tm_show", api_kwargs={"style": "success"})],
+                [InlineKeyboardButton("🔄 Get New Email", callback_data="tm_create", api_kwargs={"style": "danger"})],
+                [InlineKeyboardButton("🗑️ Delete Email", callback_data="tm_delete", api_kwargs={"style": "primary"})],
             ])
         )
     else:
         await update.message.reply_text(
             "📧 *Temporary Email*\n\n✅ Create a new disposable email address.",
             parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🆕 Create New Email", callback_data="tm_create", api_kwargs={"style": "primary"})]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🆕 Create New Email", callback_data="tm_create", api_kwargs={"style": "success"})]])
         )
 
 async def cb_tm_create(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1793,7 +1787,7 @@ async def cb_tm_create(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "❌ *Email creation failed.* Please try again.",
                     chat_id=uid, message_id=loading.message_id,
                     parse_mode="Markdown",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Retry", callback_data="tm_create", api_kwargs={"style": "success"})]])
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Retry", callback_data="tm_create", api_kwargs={"style": "danger"})]])
                 )
                 return
             temp_mails[uid] = new_email
@@ -1803,9 +1797,9 @@ async def cb_tm_create(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=uid, message_id=loading.message_id,
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("📬 Check Inbox", callback_data="tm_inbox", api_kwargs={"style": "danger"})],
-                    [InlineKeyboardButton("🔄 Get New Email", callback_data="tm_create", api_kwargs={"style": "primary"})],
-                    [InlineKeyboardButton("🗑️ Delete", callback_data="tm_delete", api_kwargs={"style": "success"})],
+                    [InlineKeyboardButton("📬 Check Inbox", callback_data="tm_inbox", api_kwargs={"style": "primary"})],
+                    [InlineKeyboardButton("🔄 Get New Email", callback_data="tm_create", api_kwargs={"style": "success"})],
+                    [InlineKeyboardButton("🗑️ Delete", callback_data="tm_delete", api_kwargs={"style": "danger"})],
                 ])
             )
         except Exception as e:
@@ -1829,7 +1823,7 @@ async def cb_tm_inbox(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid not in temp_mails:
         return await query.edit_message_text(
             "❌ No email found.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🆕 Create", callback_data="tm_create", api_kwargs={"style": "danger"})]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🆕 Create", callback_data="tm_create", api_kwargs={"style": "primary"})]])
         )
 
     email_obj = temp_mails[uid]
@@ -1855,9 +1849,9 @@ async def cb_tm_inbox(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             try:
                 await query.edit_message_text(text[:4000], parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔄 Refresh", callback_data="tm_inbox", api_kwargs={"style": "primary"})],
-                    [InlineKeyboardButton("🔄 New Email", callback_data="tm_create", api_kwargs={"style": "success"})],
-                    [InlineKeyboardButton("🗑️ Delete", callback_data="tm_delete", api_kwargs={"style": "danger"})],
+                    [InlineKeyboardButton("🔄 Refresh", callback_data="tm_inbox", api_kwargs={"style": "success"})],
+                    [InlineKeyboardButton("🔄 New Email", callback_data="tm_create", api_kwargs={"style": "danger"})],
+                    [InlineKeyboardButton("🗑️ Delete", callback_data="tm_delete", api_kwargs={"style": "primary"})],
                 ]))
             except:
                 pass
@@ -1877,8 +1871,8 @@ async def cb_tm_show(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📧 *Your Temp Email:*\n\n`{addr}`",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📬 Check Inbox", callback_data="tm_inbox", api_kwargs={"style": "primary"})],
-            [InlineKeyboardButton("🔄 New Email", callback_data="tm_create", api_kwargs={"style": "success"})],
+            [InlineKeyboardButton("📬 Check Inbox", callback_data="tm_inbox", api_kwargs={"style": "success"})],
+            [InlineKeyboardButton("🔄 New Email", callback_data="tm_create", api_kwargs={"style": "danger"})],
         ])
     )
 
@@ -1899,10 +1893,10 @@ async def handle_2fa(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔐 *2-Step Verification Code Generator*\n\nSelect a service:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📘 Facebook 2FA", callback_data="totp:facebook", api_kwargs={"style": "danger"})],
-            [InlineKeyboardButton("📸 Instagram 2FA", callback_data="totp:instagram", api_kwargs={"style": "primary"})],
-            [InlineKeyboardButton("🔍 Google 2FA", callback_data="totp:google", api_kwargs={"style": "success"})],
-            [InlineKeyboardButton("⚙️ Other 2FA", callback_data="totp:other", api_kwargs={"style": "danger"})],
+            [InlineKeyboardButton("📘 Facebook 2FA", callback_data="totp:facebook", api_kwargs={"style": "primary"})],
+            [InlineKeyboardButton("📸 Instagram 2FA", callback_data="totp:instagram", api_kwargs={"style": "success"})],
+            [InlineKeyboardButton("🔍 Google 2FA", callback_data="totp:google", api_kwargs={"style": "danger"})],
+            [InlineKeyboardButton("⚙️ Other 2FA", callback_data="totp:other", api_kwargs={"style": "primary"})],
         ])
     )
 
@@ -1930,7 +1924,7 @@ async def cb_totp_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔑 It looks like: `JBSWY3DPEHPK3PXP`\n\n"
         f"Type /cancel to cancel",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="totp_back", api_kwargs={"style": "primary"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="totp_back", api_kwargs={"style": "success"})]])
     )
 
 async def cb_totp_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1940,10 +1934,10 @@ async def cb_totp_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔐 *2FA Code Generator*\n\nSelect a service:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📘 Facebook 2FA", callback_data="totp:facebook", api_kwargs={"style": "success"})],
-            [InlineKeyboardButton("📸 Instagram 2FA", callback_data="totp:instagram", api_kwargs={"style": "danger"})],
-            [InlineKeyboardButton("🔍 Google 2FA", callback_data="totp:google", api_kwargs={"style": "primary"})],
-            [InlineKeyboardButton("⚙️ Other 2FA", callback_data="totp:other", api_kwargs={"style": "success"})],
+            [InlineKeyboardButton("📘 Facebook 2FA", callback_data="totp:facebook", api_kwargs={"style": "danger"})],
+            [InlineKeyboardButton("📸 Instagram 2FA", callback_data="totp:instagram", api_kwargs={"style": "primary"})],
+            [InlineKeyboardButton("🔍 Google 2FA", callback_data="totp:google", api_kwargs={"style": "success"})],
+            [InlineKeyboardButton("⚙️ Other 2FA", callback_data="totp:other", api_kwargs={"style": "danger"})],
         ])
     )
 
@@ -1955,7 +1949,8 @@ async def cb_totp_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if secret_enc == "TOOLONG":
         await query.edit_message_text(
             "⚠️ Secret key টি অনেক বড়। Refresh করতে আবার 🔐 2FA বাটন চাপুন।",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="totp_back", api_kwargs={"style": "danger"})]]))
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="totp_back", api_kwargs={"style": "primary"})]])
+        )
         return
 
     secret = urllib.parse.unquote(secret_enc)
@@ -1978,8 +1973,8 @@ async def cb_totp_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⏰ *{result['timeRemaining']} seconds remaining*",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔄 Refresh Code", callback_data=cb_data, api_kwargs={"style": "primary"})],
-                [InlineKeyboardButton("🔙 Back", callback_data="totp_back", api_kwargs={"style": "success"})],
+                [InlineKeyboardButton("🔄 Refresh Code", callback_data=cb_data, api_kwargs={"style": "success"})],
+                [InlineKeyboardButton("🔙 Back", callback_data="totp_back", api_kwargs={"style": "danger"})],
             ])
         )
     except:
@@ -1990,7 +1985,7 @@ async def handle_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "💬 *Support*\n\nContact admin:\n📌 @Asif_store_bot",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Contact", url="https://t.me/Asif_store_bot", api_kwargs={"style": "danger"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Contact", url="https://t.me/Asif_store_bot", api_kwargs={"style": "primary"})]])
     )
 
 # ─── Admin Callbacks ───
@@ -2023,8 +2018,8 @@ async def cb_admin_stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
         report = report[:3950] + "\n..._truncated_"
 
     await safe_edit(query, report, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔄 Refresh", callback_data="admin_stock", api_kwargs={"style": "primary"})],
-        [InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "success"})],
+        [InlineKeyboardButton("🔄 Refresh", callback_data="admin_stock", api_kwargs={"style": "success"})],
+        [InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "danger"})],
     ]))
 
 async def cb_admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2057,8 +2052,8 @@ async def cb_admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg = msg[:3950] + "..._truncated_"
 
         await safe_edit(query, msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 Refresh", callback_data="admin_users", api_kwargs={"style": "danger"})],
-            [InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "primary"})],
+            [InlineKeyboardButton("🔄 Refresh", callback_data="admin_users", api_kwargs={"style": "primary"})],
+            [InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "success"})],
         ]))
     except Exception as e:
         logger.error(f"cb_admin_users error: {e}", exc_info=True)
@@ -2066,7 +2061,7 @@ async def cb_admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(
                 f"❌ *Error loading user stats*\n\n`{str(e)[:200]}`",
                 parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "success"})]])
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "danger"})]])
             )
         except:
             pass
@@ -2087,8 +2082,8 @@ async def cb_admin_otp_log(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg += f"🕐 {get_time_ago(log.get('timestamp',''))}\n\n"
 
     await safe_edit(query, msg[:4000], parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔄 Refresh", callback_data="admin_otp_log", api_kwargs={"style": "danger"})],
-        [InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "primary"})],
+        [InlineKeyboardButton("🔄 Refresh", callback_data="admin_otp_log", api_kwargs={"style": "primary"})],
+        [InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "success"})],
     ]))
 
 async def cb_admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2102,7 +2097,7 @@ async def cb_admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.edit_message_text(
         "📢 *Broadcast Message*\n\nSend the message to broadcast to all users:",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "success"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "danger"})]])
     )
 
 async def cb_admin_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2124,14 +2119,14 @@ async def cb_admin_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"👥 Referral Commission: *{commission}%*",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📞 Number Count", callback_data="as_count", api_kwargs={"style": "danger"}),
-             InlineKeyboardButton("⏱ Cooldown", callback_data="as_cooldown", api_kwargs={"style": "primary"})],
-            [InlineKeyboardButton(f"🔐 Verification {'Disable' if settings['requireVerification'] else 'Enable'}", callback_data="as_toggle_verify", api_kwargs={"style": "success"})],
-            [InlineKeyboardButton("💵 OTP Price", callback_data="as_price", api_kwargs={"style": "danger"}),
-             InlineKeyboardButton("💸 Min Withdraw", callback_data="as_minw", api_kwargs={"style": "primary"})],
-            [InlineKeyboardButton(f"🏧 Withdraw {'🔴 Disable' if settings['withdrawEnabled'] else '🟢 Enable'}", callback_data="as_toggle_withdraw", api_kwargs={"style": "success"})],
-            [InlineKeyboardButton(f"👥 Referral Commission ({commission}%)", callback_data="as_referral_commission", api_kwargs={"style": "danger"})],
-            [InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "primary"})],
+            [InlineKeyboardButton("📞 Number Count", callback_data="as_count", api_kwargs={"style": "primary"}),
+             InlineKeyboardButton("⏱ Cooldown", callback_data="as_cooldown", api_kwargs={"style": "success"})],
+            [InlineKeyboardButton(f"🔐 Verification {'Disable' if settings['requireVerification'] else 'Enable'}", callback_data="as_toggle_verify", api_kwargs={"style": "danger"})],
+            [InlineKeyboardButton("💵 OTP Price", callback_data="as_price", api_kwargs={"style": "primary"}),
+             InlineKeyboardButton("💸 Min Withdraw", callback_data="as_minw", api_kwargs={"style": "success"})],
+            [InlineKeyboardButton(f"🏧 Withdraw {'🔴 Disable' if settings['withdrawEnabled'] else '🟢 Enable'}", callback_data="as_toggle_withdraw", api_kwargs={"style": "danger"})],
+            [InlineKeyboardButton(f"👥 Referral Commission ({commission}%)", callback_data="as_referral_commission", api_kwargs={"style": "primary"})],
+            [InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "success"})],
         ])
     )
 
@@ -2169,7 +2164,7 @@ async def cb_as_referral_commission(update: Update, context: ContextTypes.DEFAUL
         f"Send new commission percentage (0-50):\n"
         f"Example: `10` means 10%",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "success"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "danger"})]])
     )
 
 async def cb_admin_referral_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2191,6 +2186,7 @@ async def cb_admin_referral_stats(update: Update, context: ContextTypes.DEFAULT_
         f"🏆 *Top Referrers:*\n"
     )
 
+    # Top 10 referrers
     top_ref = sorted(
         [(uid_k, u.get("referralCount", 0)) for uid_k, u in users.items()],
         key=lambda x: x[1], reverse=True
@@ -2210,8 +2206,8 @@ async def cb_admin_referral_stats(update: Update, context: ContextTypes.DEFAULT_
     await query.edit_message_text(
         msg, parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton(f"⚙️ Set Commission ({commission}%)", callback_data="as_referral_commission", api_kwargs={"style": "danger"})],
-            [InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "primary"})],
+            [InlineKeyboardButton(f"⚙️ Set Commission ({commission}%)", callback_data="as_referral_commission", api_kwargs={"style": "primary"})],
+            [InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "success"})],
         ])
     )
 
@@ -2225,7 +2221,7 @@ async def cb_as_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         f"📞 *Set Number Count*\n\nCurrent: *{settings['defaultNumberCount']}*\n\nSend new count (1-100):",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "success"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "danger"})]])
     )
 
 async def cb_as_cooldown(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2238,7 +2234,7 @@ async def cb_as_cooldown(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         f"⏱ *Set Cooldown*\n\nCurrent: *{settings['cooldownSeconds']} seconds*\n\nSend new cooldown (1-3600):",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "danger"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "primary"})]])
     )
 
 async def cb_as_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2251,7 +2247,7 @@ async def cb_as_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         f"💵 *Set Default OTP Price*\n\nCurrent: *{settings.get('defaultOtpPrice', 0.25):.2f} taka*\n\nSend new price:",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "primary"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "success"})]])
     )
 
 async def cb_as_minw(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2264,7 +2260,7 @@ async def cb_as_minw(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         f"💸 *Set Min Withdraw*\n\nCurrent: *{settings['minWithdraw']} taka*\n\nSend new minimum:",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "success"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "danger"})]])
     )
 
 async def cb_admin_add_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2277,7 +2273,7 @@ async def cb_admin_add_numbers(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.edit_message_text(
         "➕ *Add Numbers*\n\nFormat:\n`[number]|[country code]|[service]`\n\nExample:\n`8801712345678|880|whatsapp`",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "danger"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "primary"})]])
     )
 
 async def cb_admin_withdrawals(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2298,10 +2294,10 @@ async def cb_admin_withdrawals(update: Update, context: ContextTypes.DEFAULT_TYP
     buttons = []
     for w in pending[:5]:
         buttons.append([
-            InlineKeyboardButton(f"✅ {w['id'][-6:]}", callback_data=f"wadm_approve:{w['id']}", api_kwargs={"style": "primary"}),
-            InlineKeyboardButton(f"❌ {w['id'][-6:]}", callback_data=f"wadm_reject:{w['id']}", api_kwargs={"style": "success"}),
+            InlineKeyboardButton(f"✅ {w['id'][-6:]}", callback_data=f"wadm_approve:{w['id']}", api_kwargs={"style": "success"}),
+            InlineKeyboardButton(f"❌ {w['id'][-6:]}", callback_data=f"wadm_reject:{w['id']}", api_kwargs={"style": "danger"}),
         ])
-    buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "danger"})])
+    buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "primary"})])
 
     await query.edit_message_text(msg[:4000], parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
 
@@ -2360,10 +2356,10 @@ async def cb_admin_balance_manage(update: Update, context: ContextTypes.DEFAULT_
         "👛 *Balance Management*\n\nSelect action:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ Add Balance", callback_data="bal_add", api_kwargs={"style": "primary"}),
-             InlineKeyboardButton("➖ Deduct Balance", callback_data="bal_deduct", api_kwargs={"style": "success"})],
-            [InlineKeyboardButton("🔄 Reset Balance", callback_data="bal_reset", api_kwargs={"style": "danger"})],
-            [InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "primary"})],
+            [InlineKeyboardButton("➕ Add Balance", callback_data="bal_add", api_kwargs={"style": "success"}),
+             InlineKeyboardButton("➖ Deduct Balance", callback_data="bal_deduct", api_kwargs={"style": "danger"})],
+            [InlineKeyboardButton("🔄 Reset Balance", callback_data="bal_reset", api_kwargs={"style": "primary"})],
+            [InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "success"})],
         ])
     )
 
@@ -2377,7 +2373,7 @@ async def cb_bal_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         "➕ *Add Balance*\n\nFormat: `[userId] [amount]`\nExample: `123456789 50`",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "success"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "danger"})]])
     )
 
 async def cb_bal_deduct(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2390,7 +2386,7 @@ async def cb_bal_deduct(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         "➖ *Deduct Balance*\n\nFormat: `[userId] [amount]`",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "danger"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "primary"})]])
     )
 
 async def cb_bal_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2403,7 +2399,7 @@ async def cb_bal_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         "🔄 *Reset Balance*\n\nSend the userId:",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "primary"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "success"})]])
     )
 
 async def cb_admin_country_prices(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2420,7 +2416,7 @@ async def cb_admin_country_prices(update: Update, context: ContextTypes.DEFAULT_
     text += "\nSend new prices (format: `880 0.50`):"
 
     await query.edit_message_text(text, parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "success"})]]))
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "danger"})]]))
 
 async def cb_admin_manage_countries(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -2432,9 +2428,9 @@ async def cb_admin_manage_countries(update: Update, context: ContextTypes.DEFAUL
         f"🌍 *Manage Countries*\n\nTotal: *{len(countries)}*",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ Add Country", callback_data="country_add", api_kwargs={"style": "danger"}),
-             InlineKeyboardButton("📋 List Countries", callback_data="country_list", api_kwargs={"style": "primary"})],
-            [InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "success"})],
+            [InlineKeyboardButton("➕ Add Country", callback_data="country_add", api_kwargs={"style": "primary"}),
+             InlineKeyboardButton("📋 List Countries", callback_data="country_list", api_kwargs={"style": "success"})],
+            [InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "danger"})],
         ])
     )
 
@@ -2446,7 +2442,7 @@ async def cb_country_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         p = country_prices.get(cc, settings.get("defaultOtpPrice", 0.25))
         text += f"{c['flag']} *{c['name']}* (+{cc}) — {p:.2f} TK/OTP\n"
     await query.edit_message_text(text[:4000], parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_manage_countries", api_kwargs={"style": "danger"})]]))
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_manage_countries", api_kwargs={"style": "primary"})]]))
 
 async def cb_country_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -2456,7 +2452,7 @@ async def cb_country_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         "🌍 *Add Country*\n\nFormat: `[code] [name] [flag]`\nExample: `880 Bangladesh 🇧🇩`",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "primary"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "success"})]])
     )
 
 async def cb_admin_manage_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2469,9 +2465,9 @@ async def cb_admin_manage_services(update: Update, context: ContextTypes.DEFAULT
         "🔧 *Manage Services*",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📋 List Services", callback_data="svc_list", api_kwargs={"style": "success"}),
-             InlineKeyboardButton("➕ Add Service", callback_data="svc_add", api_kwargs={"style": "danger"})],
-            [InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "primary"})],
+            [InlineKeyboardButton("📋 List Services", callback_data="svc_list", api_kwargs={"style": "danger"}),
+             InlineKeyboardButton("➕ Add Service", callback_data="svc_add", api_kwargs={"style": "primary"})],
+            [InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "success"})],
         ])
     )
 
@@ -2482,7 +2478,7 @@ async def cb_svc_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for svc_id, svc in services.items():
         text += f"• {svc['icon']} *{svc['name']}* (ID: `{svc_id}`)\n"
     await query.edit_message_text(text, parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_manage_services", api_kwargs={"style": "success"})]]))
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_manage_services", api_kwargs={"style": "danger"})]]))
 
 async def cb_svc_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -2492,7 +2488,7 @@ async def cb_svc_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         "🔧 *Add Service*\n\nFormat: `[id] [name] [icon]`\nExample: `facebook Facebook 📘`",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "danger"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "primary"})]])
     )
 
 async def cb_admin_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2504,9 +2500,10 @@ async def cb_admin_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sess = get_session(uid)
     sess["state"] = "admin_upload_select_service"
 
-    buttons = [[InlineKeyboardButton(f"{svc['icon']} {svc['name']}", callback_data=f"upload_svc:{svc_id}", api_kwargs={"style": "primary"})]
-               for svc_id, svc in services.items()]
-    buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "success"})])
+    _up_styles = ["primary", "success", "danger"]
+    buttons = [[InlineKeyboardButton(f"{svc['icon']} {svc['name']}", callback_data=f"upload_svc:{svc_id}", api_kwargs={"style": _up_styles[_ui % 3]})]
+               for _ui, (svc_id, svc) in enumerate(services.items())]
+    buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "danger"})])
     await query.edit_message_text("📤 *Upload Numbers*\n\nSelect service:", parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(buttons))
 
@@ -2522,7 +2519,7 @@ async def cb_upload_svc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         f"📤 *Upload Numbers for {svc['name']}*\n\nSend a .txt file with numbers (one per line).",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "danger"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "primary"})]])
     )
 
 async def cb_admin_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2540,7 +2537,7 @@ async def cb_admin_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     get_session(uid)["state"] = None
     get_session(uid)["data"]  = None
     await query.edit_message_text("❌ *Cancelled.*", parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🛠 Back to Admin", callback_data="admin_back", api_kwargs={"style": "primary"})]]))
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🛠 Back to Admin", callback_data="admin_back", api_kwargs={"style": "success"})]]))
 
 async def cb_admin_logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -2562,11 +2559,12 @@ async def cb_admin_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for cc, svcs in numbers_by_cs.items():
         for svc_id, nums in svcs.items():
             if nums:
+                _del_styles = ["danger", "primary", "success"]
                 buttons.append([InlineKeyboardButton(
                     f"🗑️ +{cc}/{svc_id} ({len(nums)})",
-                    callback_data=f"del_confirm:{cc}:{svc_id}", api_kwargs={"style": "primary"}
+                    callback_data=f"del_confirm:{cc}:{svc_id}", api_kwargs={"style": _del_styles[len(buttons) % 3]}
                 )])
-    buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="admin_back", api_kwargs={"style": "success"})])
+    buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="admin_back", api_kwargs={"style": "primary"})])
     await query.edit_message_text("🗑️ *Delete Numbers*\n\nSelect to delete:", parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(buttons))
 
@@ -2582,8 +2580,8 @@ async def cb_del_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"⚠️ *Confirm Deletion*\n\nDelete {count} numbers from +{cc}/{svc_id}?",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Yes", callback_data=f"del_exec:{cc}:{svc_id}", api_kwargs={"style": "danger"}),
-             InlineKeyboardButton("❌ No", callback_data="admin_back", api_kwargs={"style": "primary"})],
+            [InlineKeyboardButton("✅ Yes", callback_data=f"del_exec:{cc}:{svc_id}", api_kwargs={"style": "success"}),
+             InlineKeyboardButton("❌ No", callback_data="admin_back", api_kwargs={"style": "danger"})],
         ])
     )
 
@@ -2601,7 +2599,7 @@ async def cb_del_exec(update: Update, context: ContextTypes.DEFAULT_TYPE):
             del numbers_by_cs[cc]
     await async_save_numbers()
     await query.edit_message_text(f"✅ *Deleted {count} numbers.*", parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "success"})]]))
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "primary"})]]))
 
 async def cb_goto_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -2702,6 +2700,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sess["is_admin"] = True
     state = sess.get("state")
 
+    # ── WhatsApp number input ──
     if state == "wa_waiting_number":
         sess["state"] = None
         phone = re.sub(r"\D", "", text)
@@ -2732,8 +2731,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"✅ Code enter করার পর *Check Status* চাপো।",
                     parse_mode="Markdown",
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("✅ Check Status", callback_data="wa_status", api_kwargs={"style": "danger"})],
-                        [InlineKeyboardButton("🔄 New Code", callback_data="wa_connect", api_kwargs={"style": "primary"})],
+                        [InlineKeyboardButton("✅ Check Status", callback_data="wa_status", api_kwargs={"style": "success"})],
+                        [InlineKeyboardButton("🔄 New Code", callback_data="wa_connect", api_kwargs={"style": "danger"})],
                     ])
                 )
                 asyncio.create_task(monitor_wa_connection(uid, context))
@@ -2745,12 +2744,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     uid,
                     f"❌ *Connection failed:* {str(e)[:150]}\n\nকিছুক্ষণ পর আবার try করো।",
                     parse_mode="Markdown",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Try Again", callback_data="wa_connect", api_kwargs={"style": "success"})]])
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Try Again", callback_data="wa_connect", api_kwargs={"style": "primary"})]])
                 )
 
         asyncio.create_task(wa_task())
         return
 
+    # ── TOTP secret input ──
     pending_totp_svc = users.get(uid, {}).get("pending_totp_svc")
     if state == "totp_waiting_secret" or pending_totp_svc:
         sess["state"] = None
@@ -2773,8 +2773,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Example format: `JBSWY3DPEHPK3PXP`",
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔄 Try Again", callback_data=f"totp:{svc}", api_kwargs={"style": "danger"})],
-                    [InlineKeyboardButton("🔙 Back", callback_data="totp_back", api_kwargs={"style": "primary"})],
+                    [InlineKeyboardButton("🔄 Try Again", callback_data=f"totp:{svc}", api_kwargs={"style": "success"})],
+                    [InlineKeyboardButton("🔙 Back", callback_data="totp_back", api_kwargs={"style": "danger"})],
                 ])
             )
             return
@@ -2796,8 +2796,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"⏰ *{result['timeRemaining']} seconds remaining*",
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔄 Refresh Code", callback_data=cb_data, api_kwargs={"style": "success"})],
-                    [InlineKeyboardButton("🔙 Back", callback_data="totp_back", api_kwargs={"style": "danger"})],
+                    [InlineKeyboardButton("🔄 Refresh Code", callback_data=cb_data, api_kwargs={"style": "primary"})],
+                    [InlineKeyboardButton("🔙 Back", callback_data="totp_back", api_kwargs={"style": "success"})],
                 ])
             )
         except Exception as e:
@@ -2805,6 +2805,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"✅ 2FA Code: {result['token']} (⏰ {result['timeRemaining']}s)")
         return
 
+    # ── Withdraw account input ──
     if state == "w_account":
         sess["state"] = None
         data   = sess.get("data", {})
@@ -2826,12 +2827,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💵 Amount: *{amount:.2f} taka*",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ Confirm", callback_data="w_confirm", api_kwargs={"style": "primary"}),
-                 InlineKeyboardButton("❌ Cancel", callback_data="w_cancel", api_kwargs={"style": "success"})],
+                [InlineKeyboardButton("✅ Confirm", callback_data="w_confirm", api_kwargs={"style": "danger"}),
+                 InlineKeyboardButton("❌ Cancel", callback_data="w_cancel", api_kwargs={"style": "primary"})],
             ])
         )
         return
 
+    # ── Admin: Referral Commission ──
     if state == "admin_set_referral_commission" and (sess["is_admin"] or is_admin(uid)):
         sess["state"] = None
         try:
@@ -2850,6 +2852,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Invalid number. Example: `10`", parse_mode="Markdown")
         return
 
+    # ── Admin states ──
     if state == "admin_broadcast" and (sess["is_admin"] or is_admin(uid)):
         sess["state"] = None
         sent = 0
@@ -3044,7 +3047,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 f"{icon} *{method} — {amount:.2f} taka*\n\n📱 Your {method} number:",
                 parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="w_cancel", api_kwargs={"style": "danger"})]])
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="w_cancel", api_kwargs={"style": "success"})]])
             )
         except:
             pass
@@ -3152,71 +3155,6 @@ async def handle_otp_group_message(update: Update, context: ContextTypes.DEFAULT
     })
     await async_save_otp_log()
 
-# ─── Real-time Group Member Change Handler ───
-REQUIRED_GROUP_IDS = {MAIN_CHANNEL_ID, CHAT_GROUP_ID, OTP_GROUP_ID}
-
-async def handle_chat_member_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """কেউ group ছাড়লে বা join করলে real-time এ handle করো"""
-    try:
-        cm = update.chat_member
-        if not cm:
-            return
-
-        chat_id = cm.chat.id
-        if chat_id not in REQUIRED_GROUP_IDS:
-            return
-
-        user    = cm.new_chat_member.user
-        uid     = str(user.id)
-        old_status = cm.old_chat_member.status  # আগের status
-        new_status = cm.new_chat_member.status  # নতুন status
-
-        LEFT_STATUSES   = {"left", "kicked", "banned"}
-        JOINED_STATUSES = {"member", "administrator", "creator"}
-
-        # ── কেউ group ছেড়ে গেলে ──
-        if old_status in JOINED_STATUSES and new_status in LEFT_STATUSES:
-            logger.info(f"👋 User {uid} left chat {chat_id}")
-
-            if uid not in users:
-                return
-
-            # verified=False করো — referral ছাড়া user হলেও
-            users[uid]["verified"] = False
-            sess = get_session(uid)
-            sess["verified"] = False
-
-            # referral ছিল এবং confirmed ছিল → count কমাও
-            if users[uid].get("referralVerified", False):
-                users[uid]["referralVerified"] = False
-                referrer_id = users[uid].get("referredBy")
-                if referrer_id and referrer_id in users:
-                    users[referrer_id]["referralCount"] = max(0, users[referrer_id].get("referralCount", 0) - 1)
-                    if referrer_id in referrals and uid in referrals[referrer_id]:
-                        referrals[referrer_id].remove(uid)
-                    await async_save_referrals()
-                    logger.info(f"📉 Referral removed: uid={uid} left → referrer={referrer_id} count={users[referrer_id]['referralCount']}")
-                    try:
-                        await context.bot.send_message(
-                            int(referrer_id),
-                            f"⚠️ *Referral Lost!*\n\n"
-                            f"তোমার একজন referred user group ছেড়ে গেছে।\n"
-                            f"👥 Current Referrals: *{users[referrer_id]['referralCount']}*",
-                            parse_mode="Markdown"
-                        )
-                    except:
-                        pass
-
-            await async_save_users()
-            logger.info(f"🔒 Access revoked for uid={uid} (left chat {chat_id})")
-
-        # ── কেউ আবার group এ join করলে — শুধু log করো, verify এ count হবে ──
-        elif old_status in LEFT_STATUSES and new_status in JOINED_STATUSES:
-            logger.info(f"✅ User {uid} joined chat {chat_id}")
-
-    except Exception as e:
-        logger.error(f"handle_chat_member_update error: {e}")
-
 # ─── /cancel command ───
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid  = str(update.effective_user.id)
@@ -3230,7 +3168,7 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── Periodic scheduled check ───
 async def scheduled_membership_check(app):
     while True:
-        await asyncio.sleep(30 * 60)  # ৩০ মিনিট পর পর background check
+        await asyncio.sleep(2 * 3600)
         if not settings.get("requireVerification", True):
             continue
         logger.info(f"🔄 [Scheduled] Checking {len(users)} users...")
@@ -3243,30 +3181,6 @@ async def scheduled_membership_check(app):
                     blocked += 1
                     sess = get_session(uid)
                     sess["verified"] = False
-
-                    # ── রেফার কাউন্ট কমাও যদি আগে verified ছিল ──
-                    if users[uid].get("referralVerified", False):
-                        users[uid]["referralVerified"] = False
-                        referrer_id = users[uid].get("referredBy")
-                        if referrer_id and referrer_id in users:
-                            current_count = users[referrer_id].get("referralCount", 0)
-                            users[referrer_id]["referralCount"] = max(0, current_count - 1)
-                            # referrals list থেকেও সরাও
-                            if referrer_id in referrals and uid in referrals[referrer_id]:
-                                referrals[referrer_id].remove(uid)
-                            await async_save_referrals()
-                            logger.info(f"📉 Referral removed: uid={uid} left group → referrer={referrer_id} count={users[referrer_id]['referralCount']}")
-                            try:
-                                await app.bot.send_message(
-                                    int(referrer_id),
-                                    f"⚠️ *Referral Lost!*\n\n"
-                                    f"তোমার একজন referred user group ছেড়ে গেছে।\n"
-                                    f"👥 Current Referrals: *{users[referrer_id]['referralCount']}*",
-                                    parse_mode="Markdown"
-                                )
-                            except:
-                                pass
-
                     try:
                         await app.bot.send_message(int(uid),
                             "⛔ *Access Blocked!*\n\nYou left a required group.",
@@ -3285,11 +3199,13 @@ async def scheduled_membership_check(app):
 def main():
     app = Application.builder().token(BOT_TOKEN).concurrent_updates(True).build()
 
+    # Commands
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("adminlogin", cmd_adminlogin))
     app.add_handler(CommandHandler("admin", cmd_admin))
     app.add_handler(CommandHandler("cancel", cmd_cancel))
 
+    # Reply keyboard handlers
     app.add_handler(MessageHandler(filters.Regex("^(☎️ Get Number|📞 Get Numbers)$"), handle_get_numbers))
     app.add_handler(MessageHandler(filters.Regex("^📧"), handle_tempmail))
     app.add_handler(MessageHandler(filters.Regex("^🔐"), handle_2fa))
@@ -3298,8 +3214,10 @@ def main():
     app.add_handler(MessageHandler(filters.Regex("^👥 Referral$"), handle_referral))
     app.add_handler(MessageHandler(filters.Regex("^💬 Support$"), handle_support))
 
+    # Document handler
     app.add_handler(MessageHandler(filters.Document.ALL & filters.ChatType.PRIVATE, handle_document))
 
+    # Callback handlers
     app.add_handler(CallbackQueryHandler(cb_verify, pattern="^verify_user$"))
     app.add_handler(CallbackQueryHandler(cb_select_service, pattern="^svc:"))
     app.add_handler(CallbackQueryHandler(cb_select_country, pattern="^cc:"))
@@ -3327,8 +3245,10 @@ def main():
     app.add_handler(CallbackQueryHandler(cb_totp_back, pattern="^totp_back$"))
     app.add_handler(CallbackQueryHandler(cb_totp_refresh, pattern="^totp_r:"))
 
+    # Referral
     app.add_handler(CallbackQueryHandler(cb_ref_stats, pattern="^ref_stats$"))
 
+    # Admin callbacks
     app.add_handler(CallbackQueryHandler(cb_admin_stock, pattern="^admin_stock$"))
     app.add_handler(CallbackQueryHandler(cb_admin_users, pattern="^admin_users$"))
     app.add_handler(CallbackQueryHandler(cb_admin_otp_log, pattern="^admin_otp_log$"))
@@ -3366,12 +3286,10 @@ def main():
     app.add_handler(CallbackQueryHandler(cb_admin_cancel, pattern="^admin_cancel$"))
     app.add_handler(CallbackQueryHandler(cb_admin_logout, pattern="^admin_logout$"))
 
+    # OTP group handler
     app.add_handler(MessageHandler(filters.Chat(OTP_GROUP_ID) & ~filters.COMMAND, handle_otp_group_message))
+    # Private text handler
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_text))
-
-    # ── Real-time group member change (leave/join) ──
-    from telegram.ext import ChatMemberHandler
-    app.add_handler(ChatMemberHandler(handle_chat_member_update, ChatMemberHandler.CHAT_MEMBER))
 
     async def post_init(application):
         global _tg_app
