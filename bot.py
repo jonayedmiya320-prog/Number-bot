@@ -1238,13 +1238,7 @@ async def cb_select_country(update: Update, context: ContextTypes.DEFAULT_TYPE):
             + ("\n📱=WA আছে ❌=নেই" if wa_connected else "")
         )
 
-    # ── প্রতিটা নম্বরের জন্য Copy button ──
-    copy_buttons = [
-        [InlineKeyboardButton(f"📋 Copy +{n}", callback_data=f"copy_num:{n}")]
-        for n in nums
-    ]
-
-    buttons = copy_buttons + [
+    buttons = [
         [InlineKeyboardButton("📨 Open OTP Group", url=OTP_GROUP, api_kwargs={"style": "primary"})],
         [InlineKeyboardButton("🔄 Get New Numbers", callback_data=f"newnum:{svc_id}:{cc}", api_kwargs={"style": "success"})],
         [InlineKeyboardButton("🔙 Service List", callback_data="back_services", api_kwargs={"style": "danger"})],
@@ -1324,13 +1318,7 @@ async def cb_new_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
             + ("\n📱=WA আছে ❌=নেই" if wa_connected else "")
         )
 
-    # ── প্রতিটা নম্বরের জন্য Copy button ──
-    copy_buttons_new = [
-        [InlineKeyboardButton(f"📋 Copy +{n}", callback_data=f"copy_num:{n}")]
-        for n in nums
-    ]
-
-    buttons = copy_buttons_new + [
+    buttons = [
         [InlineKeyboardButton("📨 Open OTP Group", url=OTP_GROUP, api_kwargs={"style": "primary"})],
         [InlineKeyboardButton("🔄 Get New Numbers", callback_data=f"newnum:{svc_id}:{cc}", api_kwargs={"style": "success"})],
         [InlineKeyboardButton("🔙 Service List", callback_data="back_services", api_kwargs={"style": "danger"})],
@@ -3125,18 +3113,6 @@ async def handle_otp_group_message(update: Update, context: ContextTypes.DEFAULT
     })
     await async_save_otp_log()
 
-# ─── Copy Number Handler ───
-async def cb_copy_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    number = query.data.split(":", 1)[1]
-    # নম্বরটা আলাদা message হিসেবে পাঠাও — সহজে copy করা যাবে
-    await query.answer(f"✅ নম্বর কপি করুন: +{number}", show_alert=True)
-    await context.bot.send_message(
-        query.from_user.id,
-        f"`+{number}`",
-        parse_mode="Markdown"
-    )
-
 # ─── Real-time Group Member Change Handler ───
 REQUIRED_GROUP_IDS = {MAIN_CHANNEL_ID, CHAT_GROUP_ID, OTP_GROUP_ID}
 
@@ -3288,7 +3264,6 @@ def main():
     app.add_handler(CallbackQueryHandler(cb_verify, pattern="^verify_user$"))
     app.add_handler(CallbackQueryHandler(cb_select_service, pattern="^svc:"))
     app.add_handler(CallbackQueryHandler(cb_select_country, pattern="^cc:"))
-    app.add_handler(CallbackQueryHandler(cb_copy_number, pattern="^copy_num:"))
     app.add_handler(CallbackQueryHandler(cb_new_numbers, pattern="^newnum:"))
     app.add_handler(CallbackQueryHandler(cb_back_services, pattern="^back_services$"))
 
