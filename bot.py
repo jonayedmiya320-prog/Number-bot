@@ -3420,7 +3420,7 @@ async def run_panel(panel: dict, idx: int, app):
     username = panel["username"]
     password = panel["password"]
     logger.info(f"🚀 Panel #{idx+1} started: {url}")
-    otp_panel_status[idx] = "stopped"
+    otp_panel_status[idx] = "running"
 
     async with _aio.ClientSession(
         headers={"User-Agent": "Mozilla/5.0", "X-Requested-With": "XMLHttpRequest"},
