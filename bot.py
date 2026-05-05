@@ -3305,8 +3305,9 @@ async def scheduled_membership_check(app):
 # ═══════════════════════════════════════════════
 
 PANELS_FILE     = os.path.join(DATA_DIR, "panels.json")
-otp_panel_tasks = {}   # { index: asyncio.Task }
-otp_seen_ids    = set() # duplicate prevention
+otp_panel_tasks   = {}   # { index: asyncio.Task }
+otp_panel_status  = {}   # { index: "running" | "stopped" | "error" }
+otp_seen_ids      = set()
 
 def load_panels() -> list:
     return load_json(PANELS_FILE, [])
@@ -3419,21 +3420,30 @@ async def run_panel(panel: dict, idx: int, app):
     username = panel["username"]
     password = panel["password"]
     logger.info(f"🚀 Panel #{idx+1} started: {url}")
+    otp_panel_status[idx] = "running"
 
     async with _aio.ClientSession(
         headers={"User-Agent": "Mozilla/5.0", "X-Requested-With": "XMLHttpRequest"},
         cookie_jar=_aio.CookieJar(unsafe=True)
     ) as session:
-        last_login = 0
+        last_login   = 0
+        fail_count   = 0
         while True:
             try:
                 # ── Login / Re-login ──
-                if time.time() - last_login > 540:  # ৯ মিনিট পর পর re-login
+                if time.time() - last_login > 540:
                     ok = await panel_login(session, url, username, password)
                     if not ok:
+                        fail_count += 1
+                        if fail_count >= 3:
+                            otp_panel_status[idx] = "error"
+                            logger.error(f"❌ Panel #{idx+1} login failed 3 times, stopping.")
+                            return
                         await asyncio.sleep(60)
                         continue
                     last_login = time.time()
+                    fail_count = 0
+                    otp_panel_status[idx] = "running"
 
                 # ── SMS Fetch ──
                 sms_list = await panel_fetch_sms(session, url)
@@ -3509,9 +3519,11 @@ async def run_panel(panel: dict, idx: int, app):
                 await asyncio.sleep(2)
 
             except asyncio.CancelledError:
+                otp_panel_status[idx] = "stopped"
                 logger.info(f"⏹️ Panel #{idx+1} stopped")
                 return
             except Exception as e:
+                otp_panel_status[idx] = "error"
                 logger.error(f"❌ Panel #{idx+1} error: {e}")
                 await asyncio.sleep(30)
 
@@ -3532,8 +3544,14 @@ async def cb_admin_panels(update: Update, context: ContextTypes.DEFAULT_TYPE):
     panels = load_panels()
     msg = f"📡 *OTP Panels*\n\nTotal: *{len(panels)}*\n\n"
     for i, p in enumerate(panels):
-        running = i in otp_panel_tasks and not otp_panel_tasks[i].done()
-        msg += f"*{i+1}.* `{p['url']}`\n👤 `{p['username']}` | {'🟢 Running' if running else '🔴 Stopped'}\n\n"
+        status = otp_panel_status.get(i, "stopped")
+        if status == "running":
+            icon = "🟢 Running"
+        elif status == "error":
+            icon = "🔴 Login Failed"
+        else:
+            icon = "⚫ Stopped"
+        msg += f"*{i+1}.* `{p['url']}`\n👤 `{p['username']}` | {icon}\n\n"
 
     await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Add Panel", callback_data="panel_add", api_kwargs={"style": "primary"}),
