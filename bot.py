@@ -3420,7 +3420,7 @@ async def run_panel(panel: dict, idx: int, app):
     username = panel["username"]
     password = panel["password"]
     logger.info(f"🚀 Panel #{idx+1} started: {url}")
-    otp_panel_status[idx] = "running"
+    otp_panel_status[idx] = "connecting"  # শুরুতে connecting
 
     async with _aio.ClientSession(
         headers={"User-Agent": "Mozilla/5.0", "X-Requested-With": "XMLHttpRequest"},
@@ -3547,6 +3547,8 @@ async def cb_admin_panels(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status = otp_panel_status.get(i, "stopped")
         if status == "running":
             icon = "🟢 Running"
+        elif status == "connecting":
+            icon = "🟡 Connecting..."
         elif status == "error":
             icon = "🔴 Login Failed"
         else:
