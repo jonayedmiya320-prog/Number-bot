@@ -1992,9 +1992,9 @@ async def cb_totp_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── Support ───
 async def handle_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "💬 *Support*\n\nContact admin:\n📌 @Rizoobaloch7766",
+        "💬 *Support*\n\nContact admin:\n📌 @Asif_store_bot",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Contact", url="https://t.me/Rizoobaloch7766", api_kwargs={"style": "danger"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Contact", url="https://t.me/Asif_store_bot", api_kwargs={"style": "danger"})]])
     )
 
 # ─── Admin Callbacks ───
@@ -3455,22 +3455,35 @@ async def run_panel(panel: dict, idx: int, app):
                     otp_seen_ids.add(otp_id)
 
                     # ── Active number match ──
-                    number  = sms["number"]
+                    number  = sms["number"].lstrip("0")
                     matched = None
 
+                    logger.info(f"🔍 Panel SMS: number={number} otp={sms['otp']} active_count={len(active_numbers)}")
+
+                    # Direct match
                     if number in active_numbers:
                         matched = number
                     else:
-                        # suffix match
+                        # Try all suffix lengths
                         for n in list(active_numbers.keys()):
-                            if len(number) >= 6 and n.endswith(number[-6:]):
+                            n_clean = n.lstrip("0")
+                            num_clean = number.lstrip("0")
+                            if n_clean == num_clean:
                                 matched = n
                                 break
-                            if len(number) >= 8 and number.endswith(n[-8:]):
+                            if len(num_clean) >= 8 and n_clean.endswith(num_clean[-8:]):
+                                matched = n
+                                break
+                            if len(num_clean) >= 8 and num_clean.endswith(n_clean[-8:]):
+                                matched = n
+                                break
+                            if len(num_clean) >= 6 and n_clean.endswith(num_clean[-6:]):
                                 matched = n
                                 break
 
                     if not matched:
+                        logger.info(f"⚠️ Panel: no active number matched for {number}")
+                        logger.info(f"⚠️ Active numbers: {list(active_numbers.keys())[:5]}")
                         continue  # কোনো user এর number না
 
                     an   = active_numbers[matched]
