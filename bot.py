@@ -1993,9 +1993,9 @@ async def cb_totp_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── Support ───
 async def handle_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "💬 *Support*\n\nContact admin:\n📌 @Asif_store_bot",
+        "💬 *Support*\n\nContact admin:\n📌 @Rizoobaloch7766",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Contact", url="https://t.me/Asif_store_bot", api_kwargs={"style": "danger"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Contact", url="https://t.me/Rizoobaloch7766", api_kwargs={"style": "danger"})]])
     )
 
 # ─── Admin Callbacks ───
