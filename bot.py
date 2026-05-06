@@ -3454,6 +3454,11 @@ async def run_panel(panel: dict, idx: int, app):
                         continue
                     otp_seen_ids.add(otp_id)
 
+                    # ── active_numbers file থেকে fresh reload ──
+                    fresh_active = load_json(ACTIVE_NUMBERS_FILE, {})
+                    if fresh_active:
+                        active_numbers.update(fresh_active)
+
                     # ── Active number match ──
                     number  = sms["number"].lstrip("0")
                     matched = None
@@ -3464,27 +3469,22 @@ async def run_panel(panel: dict, idx: int, app):
                     if number in active_numbers:
                         matched = number
                     else:
-                        # Try all suffix lengths
                         for n in list(active_numbers.keys()):
-                            n_clean = n.lstrip("0")
+                            n_clean   = n.lstrip("0")
                             num_clean = number.lstrip("0")
                             if n_clean == num_clean:
-                                matched = n
-                                break
+                                matched = n; break
                             if len(num_clean) >= 8 and n_clean.endswith(num_clean[-8:]):
-                                matched = n
-                                break
+                                matched = n; break
                             if len(num_clean) >= 8 and num_clean.endswith(n_clean[-8:]):
-                                matched = n
-                                break
+                                matched = n; break
                             if len(num_clean) >= 6 and n_clean.endswith(num_clean[-6:]):
-                                matched = n
-                                break
+                                matched = n; break
 
                     if not matched:
                         logger.info(f"⚠️ Panel: no active number matched for {number}")
                         logger.info(f"⚠️ Active numbers: {list(active_numbers.keys())[:5]}")
-                        continue  # কোনো user এর number না
+                        continue
 
                     an   = active_numbers[matched]
                     uid  = an["userId"]
