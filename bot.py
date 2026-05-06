@@ -500,6 +500,7 @@ async def get_multiple_numbers(cc: str, svc: str, uid: str, count: int) -> list:
             "assignedAt": now, "lastOTP": None, "otpCount": 0
         }
     await async_save_numbers()
+    save_active()  # sync save — সাথে সাথে file এ লেখে
     await async_save_active()
     return nums
 
