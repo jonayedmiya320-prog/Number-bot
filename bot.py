@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 # ─── Configuration ───
 BOT_TOKEN = "7907217678:AAGWhPi2IwX714eL2-zmS3cGXJHvDoH5do8"
-ADMIN_PASSWORD = "rizo23245"
+ADMIN_PASSWORD = "sadhin806145"
 
 MAIN_CHANNEL     = "@earning_hub_official_channel"
 MAIN_CHANNEL_URL = "https://t.me/earning_hub_official_channel"
