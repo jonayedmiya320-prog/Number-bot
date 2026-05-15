@@ -508,7 +508,33 @@ def extract_phone_from_text(text: str):
     m = re.search(r"\+?(\d{10,15})", text)
     return m.group(1) if m else None
 
-def find_matching_active_number(text: str):
+# ─── Fast suffix index for active number matching ───
+_suffix_index: dict = {}  # { last_8_digits: number }
+
+def rebuild_suffix_index():
+    global _suffix_index
+    _suffix_index = {}
+    for n in active_numbers:
+        clean = n.lstrip("0")
+        for l in [8, 7, 6]:
+            if len(clean) >= l:
+                key = clean[-l:]
+                if key not in _suffix_index:
+                    _suffix_index[key] = n
+
+def find_active_number(panel_number: str):
+    """Panel এর number দিয়ে active_numbers এ fast match করো"""
+    clean = re.sub(r"\D", "", panel_number).lstrip("0")
+    # Direct match
+    if clean in active_numbers:
+        return clean
+    # Suffix match via index
+    for l in [8, 7, 6]:
+        if len(clean) >= l:
+            key = clean[-l:]
+            if key in _suffix_index:
+                return _suffix_index[key]
+    return None
     # ── Strategy 1: Full number direct match ──
     for num in list(active_numbers.keys()):
         if num in text:
@@ -2887,15 +2913,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sess["state"] = None
         parts = text.strip().split()
         if len(parts) != 3:
-            return await update.message.reply_text("❌ Format ভুল!\n`[URL] [username] [password]`", parse_mode="Markdown")
+            return await update.message.reply_text("❌ Format ভুল!\n`URL username password`", parse_mode="Markdown")
         url, username, password = parts
+        ptype  = sess.pop("panel_type", "masdar_client")
         panels = load_panels()
-        panels.append({"url": url, "username": username, "password": password})
+        panels.append({"url": url, "username": username, "password": password, "type": ptype})
         save_panels(panels)
         idx = len(panels) - 1
         otp_panel_tasks[idx] = asyncio.create_task(run_panel(panels[idx], idx, context.application))
+        label = PANEL_TYPE_LABEL.get(ptype, ptype)
         await update.message.reply_text(
-            f"✅ *Panel Added & Started!*\n\n🔗 `{url}`\n👤 `{username}`",
+            f"✅ *Panel Added & Started!*\n\n🔗 `{url}`\n👤 `{username}`\n🏷️ {label}",
             parse_mode="Markdown"
         )
         return
@@ -3446,13 +3474,57 @@ async def _ims_login(session, url: str, username: str, password: str) -> bool:
         logger.debug(f"IMS login failed {url}: {e}")
         return False
 
-async def panel_fetch_sms(session, url: str) -> list:
-    """Auto-detect panel type and fetch SMS"""
-    result = await _masdar_fetch(session, url)
-    if result is not None:
-        return result
-    result = await _ims_fetch(session, url)
-    return result or []
+async def panel_fetch_sms(session, url: str, panel_type: str = "masdar_client") -> list:
+    TYPE_MAP = {
+        "masdar_client": {"path": "/ints/client/res/data_smscdr.php",
+                          "ref":  "/ints/client/SMSCDRStats", "cols": 7, "idx": 4},
+        "masdar_agent":  {"path": "/ints/agent/res/data_smscdr.php",
+                          "ref":  "/ints/agent/SMSCDRStats",  "cols": 7, "idx": 4},
+        "ims_client":    {"path": "/client/res/data_smscdr.php",
+                          "ref":  "/client/SMSCDRStats",      "cols": 9, "idx": 5},
+        "ims_agent":     {"path": "/agent/res/data_smscdr.php",
+                          "ref":  "/agent/SMSCDRReports",     "cols": 9, "idx": 5},
+    }
+    cfg   = TYPE_MAP.get(panel_type, TYPE_MAP["masdar_client"])
+    today = datetime.now().strftime('%Y-%m-%d')
+    ts    = int(time.time() * 1000)
+    params = {
+        "fdate1": today + " 00:00:00",
+        "fdate2": today + " 23:59:59",
+        "frange": "", "fnum": "", "fcli": "", "fg": "0",
+        "sEcho": "1", "iColumns": str(cfg["cols"]),
+        "iDisplayStart": "0", "iDisplayLength": "100",
+        "sSearch": "", "bRegex": "false",
+        "iSortCol_0": "0", "sSortDir_0": "desc", "iSortingCols": "1",
+        "_": ts,
+    }
+    for i in range(cfg["cols"]):
+        params[f"mDataProp_{i}"] = str(i)
+    try:
+        async with session.get(
+            url + cfg["path"], params=params, ssl=False, timeout=15,
+            headers={"X-Requested-With": "XMLHttpRequest",
+                     "Referer": url + cfg["ref"]}
+        ) as r:
+            if r.status != 200: return []
+            data   = json.loads(await r.text())
+            result = []
+            for item in data.get("aaData", []):
+                if not isinstance(item, list) or len(item) <= cfg["idx"]: continue
+                if isinstance(item[0], str) and item[0].startswith('0,0,0,0'): continue
+                otp = scraper_extract_otp(str(item[cfg["idx"]]))
+                if otp:
+                    result.append({
+                        "timestamp": str(item[0]),
+                        "number":    re.sub(r"\D", "", str(item[2])) if len(item) > 2 else "",
+                        "range":     str(item[1]) if len(item) > 1 else "",
+                        "message":   str(item[cfg["idx"]]),
+                        "otp":       otp,
+                    })
+            return result
+    except Exception as e:
+        logger.error(f"❌ fetch_sms error {url}: {e}")
+        return []
 
 async def _masdar_fetch(session, url: str):
     try:
@@ -3562,7 +3634,7 @@ async def run_panel(panel: dict, idx: int, app):
                     otp_panel_status[idx] = "running"
 
                 # ── SMS Fetch ──
-                sms_list = await panel_fetch_sms(session, url)
+                sms_list = await panel_fetch_sms(session, url, panel.get("type", "masdar_client"))
 
                 for sms in sms_list:
                     otp_id = f"{sms['number']}_{sms['otp']}_{sms['timestamp']}"
@@ -3570,36 +3642,17 @@ async def run_panel(panel: dict, idx: int, app):
                         continue
                     otp_seen_ids.add(otp_id)
 
-                    # ── active_numbers file থেকে fresh reload ──
+                    # ── active_numbers fresh reload + fast match ──
                     fresh_active = load_json(ACTIVE_NUMBERS_FILE, {})
                     if fresh_active:
                         active_numbers.update(fresh_active)
+                        rebuild_suffix_index()
 
-                    # ── Active number match ──
                     number  = sms["number"].lstrip("0")
-                    matched = None
-
-                    logger.info(f"🔍 Panel SMS: number={number} otp={sms['otp']} active_count={len(active_numbers)}")
-
-                    # Direct match
-                    if number in active_numbers:
-                        matched = number
-                    else:
-                        for n in list(active_numbers.keys()):
-                            n_clean   = n.lstrip("0")
-                            num_clean = number.lstrip("0")
-                            if n_clean == num_clean:
-                                matched = n; break
-                            if len(num_clean) >= 8 and n_clean.endswith(num_clean[-8:]):
-                                matched = n; break
-                            if len(num_clean) >= 8 and num_clean.endswith(n_clean[-8:]):
-                                matched = n; break
-                            if len(num_clean) >= 6 and n_clean.endswith(num_clean[-6:]):
-                                matched = n; break
+                    matched = find_active_number(number)
 
                     if not matched:
-                        logger.info(f"⚠️ Panel: no active number matched for {number}")
-                        logger.info(f"⚠️ Active numbers: {list(active_numbers.keys())[:5]}")
+                        logger.debug(f"Panel: no match for {number}")
                         continue
 
                     an   = active_numbers[matched]
@@ -3657,6 +3710,7 @@ async def run_panel(panel: dict, idx: int, app):
                 await asyncio.sleep(30)
 
 def start_all_panels(app):
+    rebuild_suffix_index()  # startup এ index তৈরি করো
     panels = load_panels()
     for i, p in enumerate(panels):
         if i not in otp_panel_tasks or otp_panel_tasks[i].done():
@@ -3664,6 +3718,13 @@ def start_all_panels(app):
     logger.info(f"📡 {len(panels)} panel(s) started")
 
 # ── Admin Panel Callbacks ──
+PANEL_TYPE_LABEL = {
+    "masdar_client": "Masdar Client",
+    "masdar_agent":  "Masdar Agent",
+    "ims_client":    "IMS Client",
+    "ims_agent":     "IMS Agent",
+}
+
 async def cb_admin_panels(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     uid   = str(update.effective_user.id)
@@ -3680,12 +3741,16 @@ async def cb_admin_panels(update: Update, context: ContextTypes.DEFAULT_TYPE):
             icon = "🔴 Login Failed"
         else:
             icon = "⚫ Stopped"
-        msg += f"*{i+1}.* `{p['url']}`\n👤 `{p['username']}` | {icon}\n\n"
+        label = PANEL_TYPE_LABEL.get(p.get('type', ''), p.get('type', ''))
+        msg += f"*{i+1}.* `{p['url']}`\n👤 `{p['username']}` | 🏷️ {label} | {icon}\n\n"
 
     await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Add Panel", callback_data="panel_add", api_kwargs={"style": "primary"}),
-         InlineKeyboardButton("🗑️ Delete Panel", callback_data="panel_del", api_kwargs={"style": "danger"})],
-        [InlineKeyboardButton("🔄 Restart All", callback_data="panel_restart", api_kwargs={"style": "success"})],
+        [InlineKeyboardButton("➕ Masdar Client", callback_data="panel_add:masdar_client", api_kwargs={"style": "primary"}),
+         InlineKeyboardButton("➕ Masdar Agent",  callback_data="panel_add:masdar_agent",  api_kwargs={"style": "primary"})],
+        [InlineKeyboardButton("➕ IMS Client",    callback_data="panel_add:ims_client",    api_kwargs={"style": "success"}),
+         InlineKeyboardButton("➕ IMS Agent",     callback_data="panel_add:ims_agent",     api_kwargs={"style": "success"})],
+        [InlineKeyboardButton("🗑️ Delete Panel", callback_data="panel_del", api_kwargs={"style": "danger"}),
+         InlineKeyboardButton("🔄 Restart All",  callback_data="panel_restart", api_kwargs={"style": "primary"})],
         [InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "primary"})],
     ]))
 
@@ -3693,11 +3758,14 @@ async def cb_panel_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     uid   = str(update.effective_user.id)
     await query.answer()
-    get_session(uid)["state"] = "admin_add_panel"
+    ptype = query.data.split(":")[1] if ":" in query.data else "masdar_client"
+    get_session(uid)["state"]      = "admin_add_panel"
+    get_session(uid)["panel_type"] = ptype
+    label = PANEL_TYPE_LABEL.get(ptype, ptype)
     await query.edit_message_text(
-        "➕ *Add OTP Panel*\n\n"
-        "Format: `[URL] [username] [password]`\n\n"
-        "Example:\n`http://139.99.69.196 admin admin123`",
+        f"➕ *Add {label} Panel*\n\n"
+        f"Format: `URL username password`\n\n"
+        f"Example:\n`http://139.99.69.196 admin admin123`",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("❌ Cancel", callback_data="admin_panels", api_kwargs={"style": "danger"})
@@ -3828,7 +3896,7 @@ def main():
     app.add_handler(CallbackQueryHandler(cb_admin_logout, pattern="^admin_logout$"))
 
     app.add_handler(CallbackQueryHandler(cb_admin_panels, pattern="^admin_panels$"))
-    app.add_handler(CallbackQueryHandler(cb_panel_add, pattern="^panel_add$"))
+    app.add_handler(CallbackQueryHandler(cb_panel_add, pattern="^panel_add:"))
     app.add_handler(CallbackQueryHandler(cb_panel_del, pattern="^panel_del$"))
     app.add_handler(CallbackQueryHandler(cb_panel_del_confirm, pattern="^panel_del_confirm:"))
     app.add_handler(CallbackQueryHandler(cb_panel_restart, pattern="^panel_restart$"))
