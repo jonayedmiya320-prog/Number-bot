@@ -739,6 +739,46 @@ async def green_get_state(uid: str = None) -> str:
         return "authorized"
     return "notAuthorized"
 
+
+async def green_api_monitor(app):
+    logger.info("🟢 Baileys monitor started")
+    fail_counts = {}
+
+    while True:
+        await asyncio.sleep(30)
+        try:
+            for uid in list(wa_sessions.keys()):
+                if not wa_sessions.get(uid, {}).get("connected"):
+                    continue
+                try:
+                    state = await green_get_state(uid)
+                    if state != "authorized":
+                        fail_counts[uid] = fail_counts.get(uid, 0) + 1
+                        logger.warning(f"⚠️ Baileys: WA check fail #{fail_counts[uid]} uid={uid}")
+                        if fail_counts[uid] >= 5:
+                            fail_counts.pop(uid, None)
+                            wa_sessions.pop(uid, None)
+                            logger.warning(f"⚠️ Baileys: WhatsApp disconnected! uid={uid}")
+                            try:
+                                await app.bot.send_message(
+                                    int(uid),
+                                    "⚠️ *WhatsApp Disconnected!*\n\n"
+                                    "তোমার WhatsApp থেকে bot disconnect হয়েছে।\n"
+                                    "আবার connect করতে নিচের button চাপো।",
+                                    parse_mode="Markdown",
+                                    reply_markup=InlineKeyboardMarkup([[
+                                        InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect", api_kwargs={"style": "primary"})
+                                    ]])
+                                )
+                            except Exception as e:
+                                logger.error(f"Disconnect notify error uid={uid}: {e}")
+                    else:
+                        fail_counts.pop(uid, None)
+                except Exception as e:
+                    logger.error(f"Baileys monitor error uid={uid}: {e}")
+        except Exception as e:
+            logger.error(f"Baileys monitor loop error: {e}")
+
 async def send_otp_to_group(otp_code: str, group_msg: str, retries: int = 5):
     """Direct HTTP দিয়ে OTP group এ পাঠাও — PTB rate limit এড়াতে"""
     url     = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
