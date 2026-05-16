@@ -3834,6 +3834,28 @@ PANEL_TYPE_LABEL = {
     "ims_agent":     "IMS Agent",
 }
 
+async def cb_admin_panels(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    uid   = str(update.effective_user.id)
+    if not get_session(uid)["is_admin"] and not is_admin(uid):
+        return await query.answer("❌ Admin only")
+    await query.answer()
+    panels = load_panels()
+    msg = f"📡 *OTP Panels*\n\nTotal: *{len(panels)}*\n\n"
+    for i, p in enumerate(panels):
+        status = otp_panel_status.get(i, "stopped")
+        if status == "running":   icon = "🟢 Running"
+        elif status == "error":   icon = "🔴 Login Failed"
+        else:                     icon = "⚫ Stopped"
+        label = PANEL_TYPE_LABEL.get(p.get('type', ''), p.get('type', ''))
+        msg += f"*{i+1}.* `{p['url']}`\n👤 `{p['username']}` | 🏷️ {label} | {icon}\n\n"
+    await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ Add Panel", callback_data="panel_add:auto", api_kwargs={"style": "primary"})],
+        [InlineKeyboardButton("🗑️ Delete Panel", callback_data="panel_del", api_kwargs={"style": "danger"}),
+         InlineKeyboardButton("🔄 Restart All",  callback_data="panel_restart", api_kwargs={"style": "success"})],
+        [InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "primary"})],
+    ]))
+
 async def cb_admin_global_wa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     uid   = str(update.effective_user.id)
