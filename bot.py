@@ -3801,26 +3801,7 @@ async def run_panel(panel: dict, idx: int, app):
                     matched = find_active_number(number)
 
                     if not matched:
-                        # ── Unmatched — শুধু group এ পাঠাও ──
-                        masked   = f"{number[:4]}SPYX{number[-4:]}" if len(number) > 8 else number
-                        svc_name = scraper_detect_service(sms["message"], sms.get("range", ""))
-                        svc      = services.get(svc_name, {"icon": "📱", "name": svc_name.capitalize()})
-                        c_data   = countries.get("", {"flag": "🌍", "name": ""})
-                        # number থেকে country detect করো
-                        for cc_key, c_val in countries.items():
-                            if number.startswith(cc_key):
-                                c_data = c_val
-                                break
-                        country_line = f"{c_data.get('flag','🌍')} {c_data.get('name','')}" if c_data.get('name') else ""
-                        group_msg = (
-                            f"{svc['icon']} *{svc['name']}*" + (f" | {country_line}" if country_line else "") + "\n"
-                            f"───────────────────────────\n"
-                            f"☎️ Number: `{masked}`"
-                        )
-                        await send_otp_to_group(sms['otp'], group_msg)
-                        await asyncio.sleep(0.5)
                         continue
-
                     an   = active_numbers[matched]
                     uid  = an["userId"]
                     cc   = an.get("countryCode", "")
@@ -3846,17 +3827,6 @@ async def run_panel(panel: dict, idx: int, app):
                         logger.info(f"✅ OTP sent to user: +{matched} → uid={uid} otp={sms['otp']}")
                     except Exception as e:
                         logger.error(f"❌ notify error uid={uid}: {e}")
-
-                    # ── OTP Group এ পাঠাও ──
-                    svc     = services.get(svc_id, {"icon": "📱", "name": svc_id.capitalize()})
-                    country = countries.get(cc, {"flag": "🌍", "name": cc})
-                    masked  = f"{matched[:4]}SPYX{matched[-4:]}" if len(matched) > 8 else matched
-                    group_msg = (
-                        f"{svc['icon']} *{svc['name']}* | {country['flag']} {country['name']}\n"
-                        f"───────────────────────────\n"
-                        f"☎️ Number: `{masked}`"
-                    )
-                    await send_otp_to_group(sms['otp'], group_msg)
 
                     otp_log.append({
                         "phoneNumber": matched, "userId": uid, "countryCode": cc,
