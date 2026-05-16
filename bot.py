@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pyotp
 from aiohttp import web as aio_web
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, CopyTextButton
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     filters, ContextTypes, ConversationHandler
@@ -2029,9 +2029,9 @@ async def cb_totp_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── Support ───
 async def handle_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "💬 *Support*\n\nContact admin:\n📌 @sadhin8miya",
+        "💬 *Support*\n\nContact admin:\n📌 @Asif_store_bot",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Contact", url="https://t.me/sadhin8miya", api_kwargs={"style": "danger"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Contact", url="https://t.me/Asif_store_bot", api_kwargs={"style": "danger"})]])
     )
 
 # ─── Admin Callbacks ───
@@ -3660,14 +3660,6 @@ async def run_panel(panel: dict, idx: int, app):
                     cc   = an.get("countryCode", "")
                     svc_id = scraper_detect_service(sms["message"], sms["range"])
 
-                    # Duplicate OTP check
-                    otp_key = f"panel_{sms['otp']}_{matched}"
-                    if an.get("lastOTP") == otp_key:
-                        continue
-                    an["lastOTP"]  = otp_key
-                    an["otpCount"] = an.get("otpCount", 0) + 1
-                    save_active()
-
                     earned  = await add_earning(uid, cc)
                     balance = get_user_earnings(uid)["balance"]
                     svc     = services.get(svc_id, {"icon": "📱", "name": svc_id.capitalize()})
@@ -3685,9 +3677,36 @@ async def run_panel(panel: dict, idx: int, app):
 
                     try:
                         await app.bot.send_message(int(uid), notify, parse_mode="Markdown")
-                        logger.info(f"✅ OTP sent: +{matched} → uid={uid} otp={sms['otp']}")
+                        logger.info(f"✅ OTP sent to user: +{matched} → uid={uid} otp={sms['otp']}")
                     except Exception as e:
                         logger.error(f"❌ notify error uid={uid}: {e}")
+
+                    # ── OTP Group এ পাঠাও ──
+                    svc     = services.get(svc_id, {"icon": "📱", "name": svc_id.capitalize()})
+                    country = countries.get(cc, {"flag": "🌍", "name": cc})
+                    masked  = f"{matched[:4]}SPYX{matched[-4:]}" if len(matched) > 8 else matched
+                    group_msg = (
+                        f"{svc['icon']} *{svc['name']}* | {country['flag']} {country['name']}\n"
+                        f"───────────────────────────\n"
+                        f"☎️ Number: `{masked}`"
+                    )
+                    try:
+                        await app.bot.send_message(
+                            OTP_GROUP_ID,
+                            group_msg,
+                            parse_mode="Markdown",
+                            reply_markup=InlineKeyboardMarkup([[
+                                InlineKeyboardButton(
+                                    text=sms['otp'],
+                                    copy_text=CopyTextButton(text=sms['otp'])
+                                ),
+                            ],[
+                                InlineKeyboardButton("☎️ Numbers", url=CHAT_GROUP),
+                                InlineKeyboardButton("💬 Chats",   url=MAIN_CHANNEL_URL),
+                            ]])
+                        )
+                    except Exception as e:
+                        logger.error(f"❌ OTP group send error: {e}")
 
                     otp_log.append({
                         "phoneNumber": matched, "userId": uid, "countryCode": cc,
@@ -3745,12 +3764,9 @@ async def cb_admin_panels(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += f"*{i+1}.* `{p['url']}`\n👤 `{p['username']}` | 🏷️ {label} | {icon}\n\n"
 
     await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Masdar Client", callback_data="panel_add:masdar_client", api_kwargs={"style": "primary"}),
-         InlineKeyboardButton("➕ Masdar Agent",  callback_data="panel_add:masdar_agent",  api_kwargs={"style": "primary"})],
-        [InlineKeyboardButton("➕ IMS Client",    callback_data="panel_add:ims_client",    api_kwargs={"style": "success"}),
-         InlineKeyboardButton("➕ IMS Agent",     callback_data="panel_add:ims_agent",     api_kwargs={"style": "success"})],
+        [InlineKeyboardButton("➕ Add Panel", callback_data="panel_add:auto", api_kwargs={"style": "primary"})],
         [InlineKeyboardButton("🗑️ Delete Panel", callback_data="panel_del", api_kwargs={"style": "danger"}),
-         InlineKeyboardButton("🔄 Restart All",  callback_data="panel_restart", api_kwargs={"style": "primary"})],
+         InlineKeyboardButton("🔄 Restart All",  callback_data="panel_restart", api_kwargs={"style": "success"})],
         [InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "primary"})],
     ]))
 
