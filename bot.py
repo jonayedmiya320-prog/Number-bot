@@ -110,6 +110,19 @@ withdrawals    = load_json(WITHDRAW_FILE, [])
 country_prices = load_json(COUNTRY_PRICES_FILE, {})
 referrals      = load_json(REFERRALS_FILE, {})
 wa_sessions    = {}
+
+# ─── Global WhatsApp System ───
+# admin একটা WA connect করলে সব user এর number check হবে
+GLOBAL_WA_FILE    = os.path.join(DATA_DIR, "global_wa.json")
+global_wa_data    = load_json(GLOBAL_WA_FILE, {
+    "enabled":   False,   # Global WA check on/off
+    "connected": False,   # Admin WA connected কিনা
+    "phone":     "",      # Admin WA phone
+    "uid":       "",      # Admin WA session uid
+})
+
+def save_global_wa():
+    save_json(GLOBAL_WA_FILE, global_wa_data)
 _tg_app        = None
 
 countries = load_json(COUNTRIES_FILE, {
@@ -741,8 +754,8 @@ async def green_api_monitor(app):
                     if state != "authorized":
                         fail_counts[uid] = fail_counts.get(uid, 0) + 1
                         logger.warning(f"⚠️ Baileys: WA check fail #{fail_counts[uid]} uid={uid}")
-                        # ৩ বার fail হলেই disconnect বলবে
-                        if fail_counts[uid] >= 3:
+                        # ৫ বার fail হলে disconnect বলবে
+                        if fail_counts[uid] >= 5:
                             fail_counts.pop(uid, None)
                             wa_sessions.pop(uid, None)
                             logger.warning(f"⚠️ Baileys: WhatsApp disconnected! uid={uid}")
@@ -760,7 +773,6 @@ async def green_api_monitor(app):
                             except Exception as e:
                                 logger.error(f"Disconnect notify error uid={uid}: {e}")
                     else:
-                        # Connected — fail count reset করো
                         fail_counts.pop(uid, None)
                 except Exception as e:
                     logger.error(f"Baileys monitor error uid={uid}: {e}")
@@ -823,17 +835,22 @@ async def monitor_wa_connection(uid: str, context):
             logger.warning(f"monitor_wa_connection error: {e}")
 
 async def check_wa_number(phone: str, user_id: str):
-    if not wa_sessions.get(user_id, {}).get("connected"):
-        state = await green_get_state(user_id)
+    # ── Global WA enabled হলে admin WA দিয়ে check করো ──
+    effective_uid = user_id
+    if global_wa_data.get("enabled") and global_wa_data.get("connected"):
+        effective_uid = global_wa_data.get("uid", user_id)
+
+    if not wa_sessions.get(effective_uid, {}).get("connected"):
+        state = await green_get_state(effective_uid)
         if state != "authorized":
             return None
-        wa_sessions[user_id] = {"connected": True}
+        wa_sessions[effective_uid] = {"connected": True}
     digits = re.sub(r"\D", "", phone)
     loop   = asyncio.get_event_loop()
     try:
         result = await loop.run_in_executor(
             None,
-            lambda: baileys_request("POST", "/check", {"numbers": [digits], "userId": user_id})
+            lambda: baileys_request("POST", "/check", {"numbers": [digits], "userId": effective_uid})
         )
         logger.info(f"📱 WA check +{digits}: {result}")
         results = result.get("results", {})
@@ -985,7 +1002,8 @@ def admin_keyboard():
          InlineKeyboardButton("💸 Withdrawals", callback_data="admin_withdrawals", api_kwargs={"style": "danger"})],
         [InlineKeyboardButton("👛 Balance Management", callback_data="admin_balance_manage", api_kwargs={"style": "primary"}),
          InlineKeyboardButton("👥 Referral Stats", callback_data="admin_referral_stats", api_kwargs={"style": "success"})],
-        [InlineKeyboardButton("📡 OTP Panels", callback_data="admin_panels", api_kwargs={"style": "danger"})],
+        [InlineKeyboardButton("📡 OTP Panels", callback_data="admin_panels", api_kwargs={"style": "danger"}),
+         InlineKeyboardButton("📱 Global WA", callback_data="admin_global_wa", api_kwargs={"style": "primary"})],
         [InlineKeyboardButton("🚪 Logout", callback_data="admin_logout", api_kwargs={"style": "danger"})],
     ])
 
@@ -1288,7 +1306,7 @@ async def cb_select_country(update: Update, context: ContextTypes.DEFAULT_TYPE):
     country = countries.get(cc, {"flag": "🌍", "name": cc})
     svc     = services.get(svc_id, {"icon": "📞", "name": svc_id})
     price   = get_otp_price(cc)
-    wa_connected = wa_sessions.get(uid, {}).get("connected", False)
+    wa_connected = wa_sessions.get(uid, {}).get("connected", False) or (global_wa_data.get("enabled") and global_wa_data.get("connected"))
 
     def make_msg():
         return (
@@ -1376,7 +1394,7 @@ async def cb_new_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     country = countries.get(cc, {"flag": "🌍", "name": cc})
     svc     = services.get(svc_id, {"icon": "📞", "name": svc_id})
     price   = get_otp_price(cc)
-    wa_connected = wa_sessions.get(uid, {}).get("connected", False)
+    wa_connected = wa_sessions.get(uid, {}).get("connected", False) or (global_wa_data.get("enabled") and global_wa_data.get("connected"))
 
     def make_msg_new():
         return (
@@ -2911,6 +2929,53 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Invalid number. Example: `10`", parse_mode="Markdown")
         return
 
+    if state == "global_wa_phone" and (sess["is_admin"] or is_admin(uid)):
+        sess["state"] = None
+        phone = re.sub(r"\D", "", text.strip())
+        if len(phone) < 8:
+            return await update.message.reply_text("❌ নম্বর ভুল!")
+        loading = await update.message.reply_text("⏳ Connecting Global WhatsApp...")
+        try:
+            code = await get_wa_pairing_code(phone, f"global_{uid}")
+            if not code:
+                await loading.delete()
+                return await update.message.reply_text("❌ Pairing code পাওয়া যায়নি।")
+            global_wa_data["phone"]     = phone
+            global_wa_data["uid"]       = f"global_{uid}"
+            global_wa_data["connected"] = False
+            save_global_wa()
+            await loading.delete()
+            await update.message.reply_text(
+                f"📱 *Global WhatsApp Pairing Code:*\n\n"
+                f"`{code}`\n\n"
+                f"WhatsApp → Linked Devices → Link a Device → Enter code",
+                parse_mode="Markdown"
+            )
+            # verify loop
+            async def verify_global_wa():
+                for _ in range(20):
+                    await asyncio.sleep(15)
+                    state_check = await green_get_state(f"global_{uid}")
+                    if state_check == "authorized":
+                        wa_sessions[f"global_{uid}"] = {"connected": True}
+                        global_wa_data["connected"] = True
+                        global_wa_data["enabled"]   = True
+                        save_global_wa()
+                        try:
+                            await context.bot.send_message(
+                                int(uid),
+                                "✅ *Global WhatsApp Connected!*\n\n"
+                                "এখন সব user এর number এই WA দিয়ে check হবে।",
+                                parse_mode="Markdown"
+                            )
+                        except: pass
+                        return
+            asyncio.create_task(verify_global_wa())
+        except Exception as e:
+            await loading.delete()
+            await update.message.reply_text(f"❌ Error: {e}")
+        return
+
     if state == "admin_add_panel" and (sess["is_admin"] or is_admin(uid)):
         sess["state"] = None
         parts = text.strip().split()
@@ -3769,7 +3834,83 @@ PANEL_TYPE_LABEL = {
     "ims_agent":     "IMS Agent",
 }
 
-async def cb_admin_panels(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cb_admin_global_wa(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    uid   = str(update.effective_user.id)
+    if not get_session(uid)["is_admin"] and not is_admin(uid):
+        return await query.answer("❌ Admin only")
+    await query.answer()
+
+    connected = global_wa_data.get("connected", False)
+    enabled   = global_wa_data.get("enabled", False)
+    phone     = global_wa_data.get("phone", "N/A")
+
+    status_icon = "🟢" if connected else "🔴"
+    toggle_icon = "✅ ON" if enabled else "❌ OFF"
+
+    msg = (
+        f"📱 *Global WhatsApp System*\n\n"
+        f"*Status:* {status_icon} {'Connected' if connected else 'Disconnected'}\n"
+        f"*Phone:* `{phone}`\n"
+        f"*WA Check:* {toggle_icon}\n\n"
+        f"একটা WhatsApp connect করলে সব user এর number check হবে।"
+    )
+
+    buttons = []
+    if connected:
+        buttons.append([
+            InlineKeyboardButton(
+                f"{'🔴 Disable' if enabled else '🟢 Enable'} WA Check",
+                callback_data="global_wa_toggle",
+                api_kwargs={"style": "success" if not enabled else "danger"}
+            ),
+            InlineKeyboardButton("🔌 Disconnect", callback_data="global_wa_disconnect", api_kwargs={"style": "danger"})
+        ])
+    else:
+        buttons.append([InlineKeyboardButton("📱 Connect WhatsApp", callback_data="global_wa_connect", api_kwargs={"style": "primary"})])
+
+    buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "primary"})])
+    await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
+
+async def cb_global_wa_connect(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    uid   = str(update.effective_user.id)
+    await query.answer()
+    get_session(uid)["state"] = "global_wa_phone"
+    await query.edit_message_text(
+        "📱 *Global WhatsApp Connect*\n\n"
+        "WhatsApp নম্বর দাও (country code সহ):\n"
+        "Example: `8801712345678`",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("❌ Cancel", callback_data="admin_global_wa", api_kwargs={"style": "danger"})
+        ]])
+    )
+
+async def cb_global_wa_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    global_wa_data["enabled"] = not global_wa_data.get("enabled", False)
+    save_global_wa()
+    status = "✅ চালু" if global_wa_data["enabled"] else "❌ বন্ধ"
+    await query.answer(f"Global WA Check {status}", show_alert=True)
+    await cb_admin_global_wa(update, context)
+
+async def cb_global_wa_disconnect(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    wa_uid = global_wa_data.get("uid", "")
+    if wa_uid and wa_uid in wa_sessions:
+        wa_sessions.pop(wa_uid, None)
+    global_wa_data["connected"] = False
+    global_wa_data["phone"]     = ""
+    global_wa_data["enabled"]   = False
+    save_global_wa()
+    await query.answer("🔌 Global WA Disconnected", show_alert=True)
+    await cb_admin_global_wa(update, context)
+
+# ─── Global WA handle_text ───
+# (handle_text এ state "global_wa_phone" handle করা হবে)
     query = update.callback_query
     uid   = str(update.effective_user.id)
     if not get_session(uid)["is_admin"] and not is_admin(uid):
@@ -3936,6 +4077,10 @@ def main():
     app.add_handler(CallbackQueryHandler(cb_admin_cancel, pattern="^admin_cancel$"))
     app.add_handler(CallbackQueryHandler(cb_admin_logout, pattern="^admin_logout$"))
 
+    app.add_handler(CallbackQueryHandler(cb_admin_global_wa, pattern="^admin_global_wa$"))
+    app.add_handler(CallbackQueryHandler(cb_global_wa_connect, pattern="^global_wa_connect$"))
+    app.add_handler(CallbackQueryHandler(cb_global_wa_toggle, pattern="^global_wa_toggle$"))
+    app.add_handler(CallbackQueryHandler(cb_global_wa_disconnect, pattern="^global_wa_disconnect$"))
     app.add_handler(CallbackQueryHandler(cb_admin_panels, pattern="^admin_panels$"))
     app.add_handler(CallbackQueryHandler(cb_panel_add, pattern="^panel_add:"))
     app.add_handler(CallbackQueryHandler(cb_panel_del, pattern="^panel_del$"))
