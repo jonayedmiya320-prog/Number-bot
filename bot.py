@@ -739,7 +739,43 @@ async def green_get_state(uid: str = None) -> str:
         return "authorized"
     return "notAuthorized"
 
-async def green_api_monitor(app):
+async def send_otp_to_group(otp_code: str, group_msg: str, retries: int = 5):
+    """Direct HTTP দিয়ে OTP group এ পাঠাও — PTB rate limit এড়াতে"""
+    url     = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id":    OTP_GROUP_ID,
+        "text":       group_msg,
+        "parse_mode": "Markdown",
+        "reply_markup": {
+            "inline_keyboard": [
+                [{"text": str(otp_code), "copy_text": {"text": str(otp_code)}}],
+                [
+                    {"text": "☎️ Numbers", "url": "https://t.me/EARNING_HUB_NUMBER_BOT"},
+                    {"text": "💬 Chats",   "url": "https://t.me/earning_hub_otp_group"},
+                ]
+            ]
+        }
+    }
+    for attempt in range(1, retries + 1):
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.post(url, json=payload, timeout=15) as r:
+                    if r.status == 200:
+                        return True
+                    elif r.status == 429:
+                        data       = await r.json()
+                        retry_after = data.get("parameters", {}).get("retry_after", 10)
+                        logger.warning(f"⚠️ OTP Group Flood Wait {retry_after}s")
+                        await asyncio.sleep(retry_after + 1)
+                        continue
+                    else:
+                        logger.error(f"❌ OTP group send failed ({r.status})")
+                        return False
+        except Exception as e:
+            logger.error(f"❌ OTP group send error: {e}")
+            if attempt < retries:
+                await asyncio.sleep(3)
+    return False
     logger.info("🟢 Baileys monitor started")
     fail_counts = {}  # { uid: fail_count }
 
@@ -3740,26 +3776,7 @@ async def run_panel(panel: dict, idx: int, app):
                             f"───────────────────────────\n"
                             f"☎️ Number: `{masked}`"
                         )
-                        try:
-                            await app.bot.send_message(
-                                OTP_GROUP_ID, group_msg, parse_mode="Markdown",
-                                reply_markup=InlineKeyboardMarkup([[
-                                    InlineKeyboardButton(text=sms['otp'], copy_text=CopyTextButton(text=sms['otp'])),
-                                ],[
-                                    InlineKeyboardButton("☎️ Numbers", url="https://t.me/EARNING_HUB_NUMBER_BOT"),
-                                    InlineKeyboardButton("💬 Chats",   url="https://t.me/earning_hub_otp_group"),
-                                ]])
-                            )
-                        except Exception as e:
-                            err_str = str(e).lower()
-                            if "flood" in err_str or "429" in err_str or "retry" in err_str:
-                                import re as _re
-                                m = _re.search(r'retry after (\d+)', str(e), _re.IGNORECASE)
-                                wait = int(m.group(1)) + 1 if m else 30
-                                logger.warning(f"⚠️ Flood wait {wait}s (unmatched)")
-                                await asyncio.sleep(wait)
-                            else:
-                                logger.error(f"❌ Group send error (unmatched): {e}")
+                        await send_otp_to_group(sms['otp'], group_msg)
                         await asyncio.sleep(0.5)
                         continue
 
@@ -3798,26 +3815,7 @@ async def run_panel(panel: dict, idx: int, app):
                         f"───────────────────────────\n"
                         f"☎️ Number: `{masked}`"
                     )
-                    try:
-                        await app.bot.send_message(
-                            OTP_GROUP_ID, group_msg, parse_mode="Markdown",
-                            reply_markup=InlineKeyboardMarkup([[
-                                InlineKeyboardButton(text=sms['otp'], copy_text=CopyTextButton(text=sms['otp'])),
-                            ],[
-                                InlineKeyboardButton("☎️ Numbers", url="https://t.me/EARNING_HUB_NUMBER_BOT"),
-                                InlineKeyboardButton("💬 Chats",   url="https://t.me/earning_hub_otp_group"),
-                            ]])
-                        )
-                    except Exception as e:
-                        err_str = str(e).lower()
-                        if "flood" in err_str or "429" in err_str or "retry" in err_str:
-                            import re as _re
-                            m = _re.search(r'retry after (\d+)', str(e), _re.IGNORECASE)
-                            wait = int(m.group(1)) + 1 if m else 30
-                            logger.warning(f"⚠️ Flood wait {wait}s (matched)")
-                            await asyncio.sleep(wait)
-                        else:
-                            logger.error(f"❌ OTP group send error: {e}")
+                    await send_otp_to_group(sms['otp'], group_msg)
 
                     otp_log.append({
                         "phoneNumber": matched, "userId": uid, "countryCode": cc,
