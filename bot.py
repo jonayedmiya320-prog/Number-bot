@@ -392,7 +392,9 @@ async def async_save_referrals():
     await loop.run_in_executor(None, save_referrals)
 
 def save_users():       save_json(USERS_FILE, users)
-def save_active():      save_json(ACTIVE_NUMBERS_FILE, active_numbers)
+def save_active():
+    save_json(ACTIVE_NUMBERS_FILE, active_numbers)
+    rebuild_suffix_index()
 def save_otp_log():     save_json(OTP_LOG_FILE, otp_log[-1000:])
 def save_admins():      save_json(ADMINS_FILE, admins)
 def save_totp():        save_json(TOTP_SECRETS_FILE, totp_secrets)
@@ -3642,9 +3644,10 @@ async def run_panel(panel: dict, idx: int, app):
                         continue
                     otp_seen_ids.add(otp_id)
 
-                    # ── active_numbers fresh reload + fast match ──
+                    # ── active_numbers fresh reload ──
                     fresh_active = load_json(ACTIVE_NUMBERS_FILE, {})
-                    if fresh_active:
+                    if fresh_active and set(fresh_active.keys()) != set(active_numbers.keys()):
+                        active_numbers.clear()
                         active_numbers.update(fresh_active)
                         rebuild_suffix_index()
 
