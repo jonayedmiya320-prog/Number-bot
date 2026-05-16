@@ -3653,11 +3653,18 @@ async def run_panel(panel: dict, idx: int, app):
 
                     if not matched:
                         # ── Unmatched — শুধু group এ পাঠাও ──
-                        masked  = f"{number[:4]}SPYX{number[-4:]}" if len(number) > 8 else number
+                        masked   = f"{number[:4]}SPYX{number[-4:]}" if len(number) > 8 else number
                         svc_name = scraper_detect_service(sms["message"], sms.get("range", ""))
-                        svc     = services.get(svc_name, {"icon": "📱", "name": svc_name.capitalize()})
+                        svc      = services.get(svc_name, {"icon": "📱", "name": svc_name.capitalize()})
+                        c_data   = countries.get("", {"flag": "🌍", "name": ""})
+                        # number থেকে country detect করো
+                        for cc_key, c_val in countries.items():
+                            if number.startswith(cc_key):
+                                c_data = c_val
+                                break
+                        country_line = f"{c_data.get('flag','🌍')} {c_data.get('name','')}" if c_data.get('name') else ""
                         group_msg = (
-                            f"{svc['icon']} *{svc['name']}*\n"
+                            f"{svc['icon']} *{svc['name']}*" + (f" | {country_line}" if country_line else "") + "\n"
                             f"───────────────────────────\n"
                             f"☎️ Number: `{masked}`"
                         )
@@ -3667,8 +3674,8 @@ async def run_panel(panel: dict, idx: int, app):
                                 reply_markup=InlineKeyboardMarkup([[
                                     InlineKeyboardButton(text=sms['otp'], copy_text=CopyTextButton(text=sms['otp'])),
                                 ],[
-                                    InlineKeyboardButton("☎️ Numbers", url=CHAT_GROUP),
-                                    InlineKeyboardButton("💬 Chats",   url=MAIN_CHANNEL_URL),
+                                    InlineKeyboardButton("☎️ Numbers", url="https://t.me/EARNING_HUB_NUMBER_BOT"),
+                                    InlineKeyboardButton("💬 Chats",   url="https://t.me/earning_hub_otp_group"),
                                 ]])
                             )
                         except Exception as e:
@@ -3712,17 +3719,12 @@ async def run_panel(panel: dict, idx: int, app):
                     )
                     try:
                         await app.bot.send_message(
-                            OTP_GROUP_ID,
-                            group_msg,
-                            parse_mode="Markdown",
+                            OTP_GROUP_ID, group_msg, parse_mode="Markdown",
                             reply_markup=InlineKeyboardMarkup([[
-                                InlineKeyboardButton(
-                                    text=sms['otp'],
-                                    copy_text=CopyTextButton(text=sms['otp'])
-                                ),
+                                InlineKeyboardButton(text=sms['otp'], copy_text=CopyTextButton(text=sms['otp'])),
                             ],[
-                                InlineKeyboardButton("☎️ Numbers", url=CHAT_GROUP),
-                                InlineKeyboardButton("💬 Chats",   url=MAIN_CHANNEL_URL),
+                                InlineKeyboardButton("☎️ Numbers", url="https://t.me/EARNING_HUB_NUMBER_BOT"),
+                                InlineKeyboardButton("💬 Chats",   url="https://t.me/earning_hub_otp_group"),
                             ]])
                         )
                     except Exception as e:
