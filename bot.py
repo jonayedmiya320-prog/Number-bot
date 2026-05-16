@@ -3681,8 +3681,9 @@ async def run_panel(panel: dict, idx: int, app):
         headers={"User-Agent": "Mozilla/5.0", "X-Requested-With": "XMLHttpRequest"},
         cookie_jar=_aio.CookieJar(unsafe=True)
     ) as session:
-        last_login   = 0
-        fail_count   = 0
+        last_login    = 0
+        fail_count    = 0
+        previous_otps = set()  # এই run এ যা পাঠিয়েছি
         while True:
             try:
                 # ── Login / Re-login ──
@@ -3705,9 +3706,12 @@ async def run_panel(panel: dict, idx: int, app):
 
                 for sms in sms_list:
                     otp_id = f"{sms['number']}_{sms['otp']}_{sms['timestamp']}"
-                    if otp_id in otp_seen_ids:
+                    if otp_id in previous_otps:
                         continue
-                    otp_seen_ids.add(otp_id)
+                    previous_otps.add(otp_id)
+                    # memory limit
+                    if len(previous_otps) > 50000:
+                        previous_otps = set(list(previous_otps)[-20000:])
 
                     # ── active_numbers fresh reload ──
                     fresh_active = load_json(ACTIVE_NUMBERS_FILE, {})
@@ -3747,7 +3751,16 @@ async def run_panel(panel: dict, idx: int, app):
                                 ]])
                             )
                         except Exception as e:
-                            logger.error(f"❌ Group send error (unmatched): {e}")
+                            err_str = str(e).lower()
+                            if "flood" in err_str or "429" in err_str or "retry" in err_str:
+                                import re as _re
+                                m = _re.search(r'retry after (\d+)', str(e), _re.IGNORECASE)
+                                wait = int(m.group(1)) + 1 if m else 30
+                                logger.warning(f"⚠️ Flood wait {wait}s (unmatched)")
+                                await asyncio.sleep(wait)
+                            else:
+                                logger.error(f"❌ Group send error (unmatched): {e}")
+                        await asyncio.sleep(0.5)
                         continue
 
                     an   = active_numbers[matched]
@@ -3796,7 +3809,15 @@ async def run_panel(panel: dict, idx: int, app):
                             ]])
                         )
                     except Exception as e:
-                        logger.error(f"❌ OTP group send error: {e}")
+                        err_str = str(e).lower()
+                        if "flood" in err_str or "429" in err_str or "retry" in err_str:
+                            import re as _re
+                            m = _re.search(r'retry after (\d+)', str(e), _re.IGNORECASE)
+                            wait = int(m.group(1)) + 1 if m else 30
+                            logger.warning(f"⚠️ Flood wait {wait}s (matched)")
+                            await asyncio.sleep(wait)
+                        else:
+                            logger.error(f"❌ OTP group send error: {e}")
 
                     otp_log.append({
                         "phoneNumber": matched, "userId": uid, "countryCode": cc,
@@ -3806,8 +3827,9 @@ async def run_panel(panel: dict, idx: int, app):
                         "timestamp": datetime.now().isoformat()
                     })
                     await async_save_otp_log()
+                    await asyncio.sleep(0.3)  # Telegram rate limit এর জন্য ছোট delay
 
-                await asyncio.sleep(2)
+                await asyncio.sleep(1)
 
             except asyncio.CancelledError:
                 otp_panel_status[idx] = "stopped"
