@@ -3652,7 +3652,27 @@ async def run_panel(panel: dict, idx: int, app):
                     matched = find_active_number(number)
 
                     if not matched:
-                        logger.debug(f"Panel: no match for {number}")
+                        # ── Unmatched — শুধু group এ পাঠাও ──
+                        masked  = f"{number[:4]}SPYX{number[-4:]}" if len(number) > 8 else number
+                        svc_name = scraper_detect_service(sms["message"], sms.get("range", ""))
+                        svc     = services.get(svc_name, {"icon": "📱", "name": svc_name.capitalize()})
+                        group_msg = (
+                            f"{svc['icon']} *{svc['name']}*\n"
+                            f"───────────────────────────\n"
+                            f"☎️ Number: `{masked}`"
+                        )
+                        try:
+                            await app.bot.send_message(
+                                OTP_GROUP_ID, group_msg, parse_mode="Markdown",
+                                reply_markup=InlineKeyboardMarkup([[
+                                    InlineKeyboardButton(text=sms['otp'], copy_text=CopyTextButton(text=sms['otp'])),
+                                ],[
+                                    InlineKeyboardButton("☎️ Numbers", url=CHAT_GROUP),
+                                    InlineKeyboardButton("💬 Chats",   url=MAIN_CHANNEL_URL),
+                                ]])
+                            )
+                        except Exception as e:
+                            logger.error(f"❌ Group send error (unmatched): {e}")
                         continue
 
                     an   = active_numbers[matched]
