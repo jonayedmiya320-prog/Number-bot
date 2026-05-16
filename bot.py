@@ -781,6 +781,7 @@ async def green_api_monitor(app):
 
 async def send_otp_to_group(otp_code: str, group_msg: str, retries: int = 5):
     """Direct HTTP দিয়ে OTP group এ পাঠাও — PTB rate limit এড়াতে"""
+    import aiohttp as _aiohttp
     url     = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id":    OTP_GROUP_ID,
@@ -798,7 +799,7 @@ async def send_otp_to_group(otp_code: str, group_msg: str, retries: int = 5):
     }
     for attempt in range(1, retries + 1):
         try:
-            async with aiohttp.ClientSession() as s:
+            async with _aiohttp.ClientSession() as s:
                 async with s.post(url, json=payload, timeout=15) as r:
                     if r.status == 200:
                         return True
