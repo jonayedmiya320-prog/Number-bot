@@ -33,8 +33,8 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = "7907217678:AAGdQ7yuE02hjY7UWhR_2XCEZ-tidbSrpv4"
 ADMIN_PASSWORD = "sadhin232960"
 
-MAIN_CHANNEL     = "@earning_hub_official_channel"
-MAIN_CHANNEL_URL = "https://t.me/earning_hub_official_channel"
+MAIN_CHANNEL     = "@TIGER_MAIN"
+MAIN_CHANNEL_URL = "https://t.me/TIGER_MAIN"
 MAIN_CHANNEL_ID  = -1003543718769
 CHAT_GROUP       = "https://t.me/earning_hub_number_channel"
 CHAT_GROUP_ID    = -1003875142184
