@@ -35,11 +35,11 @@ ADMIN_PASSWORD = "sadhin232960"
 
 MAIN_CHANNEL     = "@TIGER_MAIN"
 MAIN_CHANNEL_URL = "https://t.me/TIGER_MAIN"
-MAIN_CHANNEL_ID  = -1003543718769
-CHAT_GROUP       = "https://t.me/earning_hub_number_channel"
-CHAT_GROUP_ID    = -1003875142184
-OTP_GROUP        = "https://t.me/EarningHub_otp"
-OTP_GROUP_ID     = -1003247504066
+MAIN_CHANNEL_ID  = -1003969775305
+CHAT_GROUP       = "https://t.me/TIGER_UPDAT"
+CHAT_GROUP_ID    = -1003770404644
+OTP_GROUP        = "https://t.me/TIGER_OTP1"
+OTP_GROUP_ID     = -1003894988624
 
 # ─── Baileys API (WhatsApp) ───
 BAILEYS_URL = os.environ.get("BAILEYS_URL", "http://localhost:3000")
