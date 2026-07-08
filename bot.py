@@ -30,16 +30,16 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 # ─── Configuration ───
-BOT_TOKEN = "8766792214:AAFa02EWmefsctBrGn2mfEYRvwxm_QY4o2Q"
-ADMIN_PASSWORD = "sadhin232960"
+BOT_TOKEN = "7907217678:AAGWhPi2IwX714eL2-zmS3cGXJHvDoH5do8"
+ADMIN_PASSWORD = "sadhin232134"
 
-MAIN_CHANNEL     = "@TIGER_MAIN"
-MAIN_CHANNEL_URL = "https://t.me/TIGER_MAIN"
-MAIN_CHANNEL_ID  = -1003969775305
-CHAT_GROUP       = "https://t.me/TIGER_UPDAT"
-CHAT_GROUP_ID    = -1003770404644
-OTP_GROUP        = "https://t.me/TIGER_OTP1"
-OTP_GROUP_ID     = -1003894988624
+MAIN_CHANNEL     = "@earning_hub_official_channel"
+MAIN_CHANNEL_URL = "https://t.me/earning_hub_official_channel"
+MAIN_CHANNEL_ID  = -1003543718769
+CHAT_GROUP       = "https://t.me/earning_hub_number_channel"
+CHAT_GROUP_ID    = -1003875142184
+OTP_GROUP        = "https://t.me/EarningHub_otp"
+OTP_GROUP_ID     = -1003247504066
 
 # ─── Baileys API (WhatsApp) ───
 BAILEYS_URL = os.environ.get("BAILEYS_URL", "http://localhost:3000")
@@ -1295,12 +1295,12 @@ async def handle_get_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE)
     for i in range(0, len(avail), 2):
         row = []
         row.append(InlineKeyboardButton(
-            f"{avail[i][1]['icon']} {avail[i][1]['name']}",
+            f"{avail[i][1]['icon']} {avail[i][1]['name']} ({avail[i][2]})",
             callback_data=f"svc:{avail[i][0]}", api_kwargs={"style": _svc_colors[i % 3]}
         ))
         if i+1 < len(avail):
             row.append(InlineKeyboardButton(
-                f"{avail[i+1][1]['icon']} {avail[i+1][1]['name']}",
+                f"{avail[i+1][1]['icon']} {avail[i+1][1]['name']} ({avail[i+1][2]})",
                 callback_data=f"svc:{avail[i+1][0]}", api_kwargs={"style": _svc_colors[(i+1) % 3]}
             ))
         buttons.append(row)
@@ -1543,12 +1543,12 @@ async def cb_back_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for i in range(0, len(avail), 2):
         row = []
         row.append(InlineKeyboardButton(
-            f"{avail[i][1]['icon']} {avail[i][1]['name']}",
+            f"{avail[i][1]['icon']} {avail[i][1]['name']} ({avail[i][2]})",
             callback_data=f"svc:{avail[i][0]}", api_kwargs={"style": _svc_colors[i % 3]}
         ))
         if i+1 < len(avail):
             row.append(InlineKeyboardButton(
-                f"{avail[i+1][1]['icon']} {avail[i+1][1]['name']}",
+                f"{avail[i+1][1]['icon']} {avail[i+1][1]['name']} ({avail[i+1][2]})",
                 callback_data=f"svc:{avail[i+1][0]}", api_kwargs={"style": _svc_colors[(i+1) % 3]}
             ))
         buttons.append(row)
@@ -2126,9 +2126,9 @@ async def cb_totp_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── Support ───
 async def handle_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "💬 *Support*\n\nContact admin:\n📌 @TEME_TIGER",
+        "💬 *Support*\n\nContact admin:\n📌 @Asif_store_bot",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Contact", url="https://t.me/TEME_TIGER", api_kwargs={"style": "danger"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Contact", url="https://t.me/Asif_store_bot", api_kwargs={"style": "danger"})]])
     )
 
 # ─── Admin Callbacks ───
