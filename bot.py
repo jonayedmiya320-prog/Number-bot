@@ -30,12 +30,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 # ─── Configuration ───
-BOT_TOKEN = "7907217678:AAGWhPi2IwX714eL2-zmS3cGXJHvDoH5do8"
+BOT_TOKEN = "8689224091:AAHlDYCx-14hrKyj0tTJcYtCioMhagyS70Y"
 ADMIN_PASSWORD = "sadhin1232134"
 
 MAIN_CHANNEL     = "@earning_hub_official_channel"
-MAIN_CHANNEL_URL = "https://t.me/earning_hub_official_channel"
-MAIN_CHANNEL_ID  = -1003543718769
+MAIN_CHANNEL_URL = "https://t.me/hm_method_channel"
+MAIN_CHANNEL_ID  = -1004408097323
 CHAT_GROUP       = "https://t.me/earning_hub_number_channel"
 CHAT_GROUP_ID    = -1003875142184
 OTP_GROUP        = "https://t.me/EarningHub_otp"
