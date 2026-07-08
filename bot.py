@@ -33,13 +33,13 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = "8689224091:AAHlDYCx-14hrKyj0tTJcYtCioMhagyS70Y"
 ADMIN_PASSWORD = "sadhin1232134"
 
-MAIN_CHANNEL     = "@earning_hub_official_channel"
+MAIN_CHANNEL     = "@hm_method_channel"
 MAIN_CHANNEL_URL = "https://t.me/hm_method_channel"
 MAIN_CHANNEL_ID  = -1004408097323
-CHAT_GROUP       = "https://t.me/earning_hub_number_channel"
-CHAT_GROUP_ID    = -1003875142184
-OTP_GROUP        = "https://t.me/EarningHub_otp"
-OTP_GROUP_ID     = -1003247504066
+CHAT_GROUP       = "https://t.me/hm_method_channel"
+CHAT_GROUP_ID    = -1004408097323
+OTP_GROUP        = "https://t.me/+PJj--L8qsChhYjg9"
+OTP_GROUP_ID     = -1004360319407
 
 # ─── Baileys API (WhatsApp) ───
 BAILEYS_URL = os.environ.get("BAILEYS_URL", "http://localhost:3000")
