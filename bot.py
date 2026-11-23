@@ -29,10 +29,11 @@ from telegram.ext import (
 # ─── Logging ───
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # ─── Configuration ───
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "7907217678:AAHAmCLtMKr0JLK4g0b0cNX965nFtsBMXy8")  # ⚠️ Railway/VPS এ BOT_TOKEN env সেট করো, তারপর এই fallback মুছে দাও
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "sadhin232134")  # ⚠️ ADMIN_PASSWORD env সেট করো
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+ADMIN_PASSWORD = os.environ["ADMIN_PASSWORD"]
 
 MAIN_CHANNEL     = "@earning_hub_official_channel"
 MAIN_CHANNEL_URL = "https://t.me/earning_hub_official_channel"
