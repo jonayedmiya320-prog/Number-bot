@@ -19,7 +19,8 @@ from pathlib import Path
 
 import pyotp
 from aiohttp import web as aio_web
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, CopyTextButton
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, CopyTextButton
+from telegram.error import RetryAfter, TimedOut, NetworkError
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     filters, ContextTypes, ConversationHandler
@@ -30,16 +31,16 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 # ─── Configuration ───
-BOT_TOKEN = "8689224091:AAHlDYCx-14hrKyj0tTJcYtCioMhagyS70Y"
-ADMIN_PASSWORD = "sadhin1232134"
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "7907217678:AAHAmCLtMKr0JLK4g0b0cNX965nFtsBMXy8")  # ⚠️ Railway/VPS এ BOT_TOKEN env সেট করো, তারপর এই fallback মুছে দাও
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "sadhin232134")  # ⚠️ ADMIN_PASSWORD env সেট করো
 
-MAIN_CHANNEL     = "@hm_method_channel"
-MAIN_CHANNEL_URL = "https://t.me/hm_method_channel"
-MAIN_CHANNEL_ID  = -1004408097323
-CHAT_GROUP       = "https://t.me/hm_method_channel"
-CHAT_GROUP_ID    = -1004408097323
-OTP_GROUP        = "https://t.me/+PJj--L8qsChhYjg9"
-OTP_GROUP_ID     = -1004360319407
+MAIN_CHANNEL     = "@earning_hub_official_channel"
+MAIN_CHANNEL_URL = "https://t.me/earning_hub_official_channel"
+MAIN_CHANNEL_ID  = -1003543718769
+CHAT_GROUP       = "https://t.me/earning_hub_number_channel"
+CHAT_GROUP_ID    = -1003875142184
+OTP_GROUP        = "https://t.me/EarningHub_otp"
+OTP_GROUP_ID     = -1003247504066
 
 # ─── Baileys API (WhatsApp) ───
 BAILEYS_URL = os.environ.get("BAILEYS_URL", "http://localhost:3000")
@@ -64,6 +65,8 @@ WITHDRAW_FILE       = os.path.join(DATA_DIR, "withdrawals.json")
 COUNTRY_PRICES_FILE = os.path.join(DATA_DIR, "country_prices.json")
 WA_OWNER_FILE       = os.path.join(DATA_DIR, "wa_owner.json")
 REFERRALS_FILE      = os.path.join(DATA_DIR, "referrals.json")
+PENDING_DM_FILE      = os.path.join(DATA_DIR, "pending_dm.json")
+PENDING_GROUP_FILE   = os.path.join(DATA_DIR, "pending_group.json")
 
 # ─── Default Settings ───
 DEFAULT_SETTINGS = {
@@ -75,6 +78,9 @@ DEFAULT_SETTINGS = {
     "withdrawMethods": ["bKash", "Nagad"],
     "withdrawEnabled": True,
     "referralCommission": 10,
+    "panelPollInterval": 1,     # সেকেন্ড — প্যানেল কত সেকেন্ড পরপর নতুন SMS/OTP চেক করবে
+    "queueRetryInterval": 1,    # সেকেন্ড — pending DM/Group queue কত সেকেন্ড পরপর ফ্লাশ করার চেষ্টা করবে
+    "queueExpiryHours": 3,      # ঘন্টা — এর বেশি পুরনো হলে queue থেকে entry বাদ পড়ে যাবে
 }
 
 # ─── Load/Save Helpers ───
@@ -515,7 +521,6 @@ async def get_multiple_numbers(cc: str, svc: str, uid: str, count: int) -> list:
             "assignedAt": now, "lastOTP": None, "otpCount": 0
         }
     await async_save_numbers()
-    save_active()  # sync save — সাথে সাথে file এ লেখে
     await async_save_active()
     return nums
 
@@ -648,7 +653,7 @@ async def http_otp_handler(request: aio_web.Request) -> aio_web.Response:
             return aio_web.json_response({"ok": True, "info": "duplicate"})
         an_data["lastOTP"]  = otp_key
         an_data["otpCount"] = an_data.get("otpCount", 0) + 1
-        save_active()
+        await async_save_active()
 
         earned  = await add_earning(uid, cc)
         balance = get_user_earnings(uid)["balance"]
@@ -666,10 +671,19 @@ async def http_otp_handler(request: aio_web.Request) -> aio_web.Response:
         notify += f"\n💵 *+{earned:.2f} taka earned!*\n💰 *Balance: {balance:.2f} taka*"
 
         if _tg_app:
-            try:
-                await _tg_app.bot.send_message(int(uid), notify, parse_mode="Markdown")
-            except Exception as e:
-                logger.error(f"HTTP OTP notify send error: {e}")
+            ok_dm = await send_dm_with_retry(_tg_app, uid, notify)
+            if not ok_dm:
+                logger.warning(f"⏳ HTTP OTP DM queued (rate-limit/network) → uid={uid}")
+
+        # ── Telegram OTP Group এও পাঠাও ──
+        if otp_code:
+            group_msg = (
+                f"📨 *New OTP!*\n\n"
+                f"{svc['icon']} *Service:* {svc['name']}\n"
+                f"{country['flag']} *Country:* {country['name']}\n"
+                f"📞 *Number:* +{matched_number}\n"
+            )
+            asyncio.create_task(send_otp_to_group(otp_code, group_msg))
 
         otp_log.append({
             "phoneNumber": matched_number, "userId": uid, "countryCode": cc,
@@ -767,7 +781,7 @@ async def green_api_monitor(app):
                                     "আবার connect করতে নিচের button চাপো।",
                                     parse_mode="Markdown",
                                     reply_markup=InlineKeyboardMarkup([[
-                                        InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect", api_kwargs={"style": "primary"})
+                                        InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect", style="primary")
                                     ]])
                                 )
                             except Exception as e:
@@ -779,82 +793,154 @@ async def green_api_monitor(app):
         except Exception as e:
             logger.error(f"Baileys monitor loop error: {e}")
 
-async def send_otp_to_group(otp_code: str, group_msg: str, retries: int = 5):
-    """Direct HTTP দিয়ে OTP group এ পাঠাও — PTB rate limit এড়াতে"""
+# ─── Pending DM Queue (rate-limit এ miss হওয়া DM পরে আবার পাঠানোর জন্য) ───
+pending_dm_notifications = load_json(PENDING_DM_FILE, [])
+
+def save_pending_dm():
+    save_json(PENDING_DM_FILE, pending_dm_notifications)
+
+async def send_dm_with_retry(app, uid: str, message: str, max_attempts: int = 3,
+                              log_number: str = None, log_otp: str = None) -> bool:
+    """DM পাঠানোর চেষ্টা করে; rate-limit/network error হলে সাথে সাথে কয়েকবার retry করে।
+    তাও fail হলে queue তে রেখে দেয় — background worker পরে আবার পাঠাবে।"""
+    tag = f"+{log_number} otp={log_otp} " if log_number else ""
+    for attempt in range(max_attempts):
+        try:
+            await app.bot.send_message(int(uid), message, parse_mode="Markdown")
+            logger.info(f"✅ OTP DM sent: {tag}→ uid={uid}")
+            return True
+        except RetryAfter as e:
+            wait_s = float(e.retry_after) + 1
+            logger.warning(f"⏳ Rate limited, DM uid={uid} — {wait_s}s পর retry")
+            await asyncio.sleep(wait_s)
+        except (TimedOut, NetworkError):
+            await asyncio.sleep(3)
+        except Exception as e:
+            logger.error(f"❌ DM permanent error uid={uid}: {e}")
+            return False  # ব্লক/ইউজার ডিলিট হওয়ার মতো non-retryable error — queue তে রাখার দরকার নাই
+
+    # সব চেষ্টা fail — পরে পাঠানোর জন্য queue তে রাখো
+    pending_dm_notifications.append({
+        "uid": uid, "message": message, "added": time.time(), "tries": 0
+    })
+    save_pending_dm()
+    logger.warning(f"📥 OTP DM queued for later delivery: {tag}uid={uid}")
+    return False
+
+async def _retry_dm_item(app, item: dict):
+    """একটা queued DM — rate limit শেষ হলেই সাথে সাথে (concurrently, অন্য item-এর জন্য অপেক্ষা না করে) পাঠায়।"""
+    try:
+        await app.bot.send_message(int(item["uid"]), item["message"], parse_mode="Markdown")
+        logger.info(f"✅ Queued DM delivered: uid={item['uid']}")
+        return
+    except RetryAfter as e:
+        await asyncio.sleep(float(e.retry_after) + 1)
+        try:
+            await app.bot.send_message(int(item["uid"]), item["message"], parse_mode="Markdown")
+            logger.info(f"✅ Queued DM delivered (rate-limit শেষে সাথে সাথে): uid={item['uid']}")
+            return
+        except Exception:
+            pass
+    except (TimedOut, NetworkError):
+        pass
+    except Exception as e:
+        logger.error(f"❌ Queued DM dropped (permanent) uid={item['uid']}: {e}")
+        return
+
+    # এখনো fail — আবার queue তে ফেরত দাও
+    item["tries"] = item.get("tries", 0) + 1
+    now = time.time()
+    if (now - item.get("added", now)) < settings.get("queueExpiryHours", 3) * 3600 and item.get("tries", 0) < 50:
+        pending_dm_notifications.append(item)
+    save_pending_dm()
+
+async def _retry_group_item(item: dict):
+    """একটা queued group message — rate limit শেষ হলেই সাথে সাথে পাঠায়।"""
+    ok = await _send_group_payload(item["payload"])
+    if ok:
+        logger.info("✅ Queued group OTP message delivered")
+        return
+    item["tries"] = item.get("tries", 0) + 1
+    now = time.time()
+    if (now - item.get("added", now)) < settings.get("queueExpiryHours", 3) * 3600 and item.get("tries", 0) < 50:
+        pending_group_notifications.append(item)
+    save_pending_group()
+
+async def dm_retry_worker(app):
+    """প্রতি ১ সেকেন্ডে pending queue চেক করে — প্রতিটা item স্বাধীনভাবে (concurrently) পাঠানো হয়,
+    তাই rate limit শেষ হওয়ার সাথে সাথেই সেই OTP চলে যায়, অন্য কারো জন্য অপেক্ষা করে না।"""
+    while True:
+        await asyncio.sleep(settings.get("queueRetryInterval", 1))
+
+        if pending_dm_notifications:
+            items = list(pending_dm_notifications)
+            pending_dm_notifications.clear()
+            save_pending_dm()
+            for item in items:
+                asyncio.create_task(_retry_dm_item(app, item))
+
+        if pending_group_notifications:
+            items_g = list(pending_group_notifications)
+            pending_group_notifications.clear()
+            save_pending_group()
+            for item in items_g:
+                asyncio.create_task(_retry_group_item(item))
+
+async def send_otp_to_group(otp_code: str, group_msg: str):
+    """Direct HTTP দিয়ে OTP group এ একবার পাঠানোর চেষ্টা করে — fail হলে queue তে রেখে দেয়,
+    background worker পরে আবার পাঠানোর চেষ্টা করবে (বারবার সাথে সাথে retry করে না)।"""
     import aiohttp as _aiohttp
-    url     = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id":    OTP_GROUP_ID,
         "text":       group_msg,
         "parse_mode": "Markdown",
         "reply_markup": {
             "inline_keyboard": [
-                [{"text": str(otp_code), "copy_text": {"text": str(otp_code)}}],
+                [{"text": str(otp_code), "copy_text": {"text": str(otp_code)}, "style": "success"}],
                 [
-                    {"text": "☎️ Numbers", "url": "https://t.me/EARNING_HUB_NUMBER_BOT"},
-                    {"text": "💬 Chats",   "url": "https://t.me/earning_hub_otp_group"},
+                    {"text": "☎️ Numbers", "url": "https://t.me/EARNING_HUB_NUMBER_BOT", "style": "primary"},
+                    {"text": "💬 Chats",   "url": "https://t.me/earning_hub_otp_group",   "style": "danger"},
                 ]
             ]
         }
     }
-    for attempt in range(1, retries + 1):
+    ok = await _send_group_payload(payload)
+    if not ok:
+        pending_group_notifications.append({"payload": payload, "added": time.time(), "tries": 0})
+        save_pending_group()
+        logger.warning("📥 OTP group message queued for later delivery")
+    return ok
+
+async def _send_group_payload(payload: dict) -> bool:
+    import aiohttp as _aiohttp
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    for attempt in range(2):  # প্রথমবার + rate-limit শেষ হলে সাথে সাথে আরেকবার
         try:
             async with _aiohttp.ClientSession() as s:
                 async with s.post(url, json=payload, timeout=15) as r:
                     if r.status == 200:
                         return True
                     elif r.status == 429:
-                        data       = await r.json()
+                        data        = await r.json()
                         retry_after = data.get("parameters", {}).get("retry_after", 10)
                         logger.warning(f"⚠️ OTP Group Flood Wait {retry_after}s")
-                        await asyncio.sleep(retry_after + 1)
-                        continue
+                        if attempt == 0:
+                            await asyncio.sleep(retry_after + 1)
+                            continue
+                        return False
                     else:
                         logger.error(f"❌ OTP group send failed ({r.status})")
                         return False
         except Exception as e:
             logger.error(f"❌ OTP group send error: {e}")
-            if attempt < retries:
-                await asyncio.sleep(3)
+            return False
     return False
-    logger.info("🟢 Baileys monitor started")
-    fail_counts = {}  # { uid: fail_count }
 
-    while True:
-        await asyncio.sleep(30)
-        try:
-            for uid in list(wa_sessions.keys()):
-                if not wa_sessions.get(uid, {}).get("connected"):
-                    continue
-                try:
-                    state = await green_get_state(uid)
-                    if state != "authorized":
-                        fail_counts[uid] = fail_counts.get(uid, 0) + 1
-                        logger.warning(f"⚠️ Baileys: WA check fail #{fail_counts[uid]} uid={uid}")
-                        # ৫ বার fail হলে disconnect বলবে
-                        if fail_counts[uid] >= 5:
-                            fail_counts.pop(uid, None)
-                            wa_sessions.pop(uid, None)
-                            logger.warning(f"⚠️ Baileys: WhatsApp disconnected! uid={uid}")
-                            try:
-                                await app.bot.send_message(
-                                    int(uid),
-                                    "⚠️ *WhatsApp Disconnected!*\n\n"
-                                    "তোমার WhatsApp থেকে bot disconnect হয়েছে।\n"
-                                    "আবার connect করতে নিচের button চাপো।",
-                                    parse_mode="Markdown",
-                                    reply_markup=InlineKeyboardMarkup([[
-                                        InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect", api_kwargs={"style": "primary"})
-                                    ]])
-                                )
-                            except Exception as e:
-                                logger.error(f"Disconnect notify error uid={uid}: {e}")
-                    else:
-                        fail_counts.pop(uid, None)
-                except Exception as e:
-                    logger.error(f"Baileys monitor error uid={uid}: {e}")
-        except Exception as e:
-            logger.error(f"Baileys monitor loop error: {e}")
+# ─── Pending Group Queue ───
+pending_group_notifications = load_json(PENDING_GROUP_FILE, [])
+
+def save_pending_group():
+    save_json(PENDING_GROUP_FILE, pending_group_notifications)
 
 async def get_wa_pairing_code(phone: str, user_id: str) -> str:
     digits = re.sub(r"\D", "", phone)
@@ -901,8 +987,8 @@ async def monitor_wa_connection(uid: str, context):
                         "Disconnect করতে নিচের বাটন চাপো:",
                         parse_mode="Markdown",
                         reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("🔴 Logout / Disconnect", callback_data="wa_disconnect", api_kwargs={"style": "success"})],
-                            [InlineKeyboardButton("📊 Check Status", callback_data="wa_status", api_kwargs={"style": "danger"})],
+                            [InlineKeyboardButton("🔴 Logout / Disconnect", callback_data="wa_disconnect", style="success")],
+                            [InlineKeyboardButton("📊 Check Status", callback_data="wa_status", style="danger")],
                         ])
                     )
                 except:
@@ -1049,39 +1135,40 @@ async def check_membership(user_id: int, app) -> dict:
 # ─── Keyboards ───
 def main_keyboard():
     return ReplyKeyboardMarkup([
-        ["☎️ Get Number", "📧 Get Tempmail"],
-        ["🔐 2FA", "💰 Balances"],
-        ["💸 Withdraw", "👥 Referral"],
-        ["💬 Support"]
+        [KeyboardButton("☎️ Get Number", style="primary"), KeyboardButton("📧 Get Tempmail", style="success")],
+        [KeyboardButton("🔐 2FA", style="danger"), KeyboardButton("💰 Balances", style="primary")],
+        [KeyboardButton("💸 Withdraw", style="success"), KeyboardButton("👥 Referral", style="danger")],
+        [KeyboardButton("💬 Support", style="primary")]
     ], resize_keyboard=True)
 
 def verify_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("1️⃣ 📢 Main Channel", url=MAIN_CHANNEL_URL, api_kwargs={"style": "primary"})],
-        [InlineKeyboardButton("2️⃣ 💬 Number Channel", url=CHAT_GROUP, api_kwargs={"style": "success"})],
-        [InlineKeyboardButton("3️⃣ 📨 OTP Group", url=OTP_GROUP, api_kwargs={"style": "danger"})],
-        [InlineKeyboardButton("✅ VERIFY MEMBERSHIP", callback_data="verify_user", api_kwargs={"style": "primary"})],
+        [InlineKeyboardButton("1️⃣ 📢 Main Channel", url=MAIN_CHANNEL_URL, style="primary")],
+        [InlineKeyboardButton("2️⃣ 💬 Number Channel", url=CHAT_GROUP, style="success")],
+        [InlineKeyboardButton("3️⃣ 📨 OTP Group", url=OTP_GROUP, style="danger")],
+        [InlineKeyboardButton("✅ VERIFY MEMBERSHIP", callback_data="verify_user", style="primary")],
     ])
 
 def admin_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Stock Report", callback_data="admin_stock", api_kwargs={"style": "primary"}),
-         InlineKeyboardButton("👥 User Stats", callback_data="admin_users", api_kwargs={"style": "success"})],
-        [InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast", api_kwargs={"style": "danger"}),
-         InlineKeyboardButton("📋 OTP Log", callback_data="admin_otp_log", api_kwargs={"style": "primary"})],
-        [InlineKeyboardButton("➕ Add Numbers", callback_data="admin_add_numbers", api_kwargs={"style": "success"}),
-         InlineKeyboardButton("📤 Upload File", callback_data="admin_upload", api_kwargs={"style": "danger"})],
-        [InlineKeyboardButton("🗑️ Delete Numbers", callback_data="admin_delete", api_kwargs={"style": "primary"}),
-         InlineKeyboardButton("🔧 Manage Services", callback_data="admin_manage_services", api_kwargs={"style": "success"})],
-        [InlineKeyboardButton("🌍 Manage Countries", callback_data="admin_manage_countries", api_kwargs={"style": "danger"}),
-         InlineKeyboardButton("⚙️ Settings", callback_data="admin_settings", api_kwargs={"style": "primary"})],
-        [InlineKeyboardButton("💰 Country Prices", callback_data="admin_country_prices", api_kwargs={"style": "success"}),
-         InlineKeyboardButton("💸 Withdrawals", callback_data="admin_withdrawals", api_kwargs={"style": "danger"})],
-        [InlineKeyboardButton("👛 Balance Management", callback_data="admin_balance_manage", api_kwargs={"style": "primary"}),
-         InlineKeyboardButton("👥 Referral Stats", callback_data="admin_referral_stats", api_kwargs={"style": "success"})],
-        [InlineKeyboardButton("📡 OTP Panels", callback_data="admin_panels", api_kwargs={"style": "danger"}),
-         InlineKeyboardButton("📱 Global WA", callback_data="admin_global_wa", api_kwargs={"style": "primary"})],
-        [InlineKeyboardButton("🚪 Logout", callback_data="admin_logout", api_kwargs={"style": "danger"})],
+        [InlineKeyboardButton("📊 Stock Report", callback_data="admin_stock", style="primary"),
+         InlineKeyboardButton("👥 User Stats", callback_data="admin_users", style="success")],
+        [InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast", style="danger"),
+         InlineKeyboardButton("📋 OTP Log", callback_data="admin_otp_log", style="primary")],
+        [InlineKeyboardButton("➕ Add Numbers", callback_data="admin_add_numbers", style="success"),
+         InlineKeyboardButton("📤 Upload File", callback_data="admin_upload", style="danger")],
+        [InlineKeyboardButton("🗑️ Delete Numbers", callback_data="admin_delete", style="primary"),
+         InlineKeyboardButton("🔧 Manage Services", callback_data="admin_manage_services", style="success")],
+        [InlineKeyboardButton("🌍 Manage Countries", callback_data="admin_manage_countries", style="danger"),
+         InlineKeyboardButton("⚙️ Settings", callback_data="admin_settings", style="primary")],
+        [InlineKeyboardButton("💰 Country Prices", callback_data="admin_country_prices", style="success"),
+         InlineKeyboardButton("💸 Withdrawals", callback_data="admin_withdrawals", style="danger")],
+        [InlineKeyboardButton("👛 Balance Management", callback_data="admin_balance_manage", style="primary"),
+         InlineKeyboardButton("👥 Referral Stats", callback_data="admin_referral_stats", style="success")],
+        [InlineKeyboardButton("📡 OTP Panels", callback_data="admin_panels", style="danger"),
+         InlineKeyboardButton("📱 Global WA", callback_data="admin_global_wa", style="primary")],
+        [InlineKeyboardButton("🎭 Fake OTP Numbers", callback_data="fake_otp_menu", style="success")],
+        [InlineKeyboardButton("🚪 Logout", callback_data="admin_logout", style="danger")],
     ])
 
 # ─── User Session State ───
@@ -1172,15 +1259,24 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💵 Earn money from each OTP received"
         )
 
+        import hub_features as _hub   # 🎨 Menu Design
+        _t, _pm, _rows, _custom = _hub.menu("start", welcome, "Markdown", name=user.first_name or "User")
         if sess.get("verified") or (uid in users and users[uid].get("verified")):
-            await update.message.reply_text(
-                welcome + "\n\n✅ Choose an option:",
-                parse_mode="Markdown", reply_markup=main_keyboard()
-            )
+            if _custom or _rows:
+                await update.message.reply_text(
+                    _t, parse_mode=_pm,
+                    reply_markup=InlineKeyboardMarkup(_rows) if _rows else None
+                )
+                await update.message.reply_text("✅ Choose an option:", reply_markup=main_keyboard())
+            else:
+                await update.message.reply_text(
+                    welcome + "\n\n✅ Choose an option:",
+                    parse_mode="Markdown", reply_markup=main_keyboard()
+                )
         else:
             await update.message.reply_text(
-                welcome + "\n\nFirst, join all required groups to use the bot:",
-                parse_mode="Markdown", reply_markup=verify_keyboard()
+                _t + "\n\nFirst, join all required groups to use the bot:",
+                parse_mode=_pm, reply_markup=_hub.with_rows(verify_keyboard(), _rows)
             )
     except Exception as e:
         logger.error(f"cmd_start error: {e}")
@@ -1241,6 +1337,7 @@ async def cb_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not membership["mainChannel"]: msg += "❌ 1️⃣ Main Channel\n"
         if not membership["chatGroup"]:   msg += "❌ 2️⃣ Number Channel\n"
         if not membership["otpGroup"]:    msg += "❌ 3️⃣ OTP Group\n"
+        for _t in membership.get("extra_missing", []): msg += f"❌ ➕ {_t}\n"
         msg += "\nPlease join ALL groups and click VERIFY again."
         await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=verify_keyboard())
 
@@ -1295,20 +1392,22 @@ async def handle_get_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE)
     for i in range(0, len(avail), 2):
         row = []
         row.append(InlineKeyboardButton(
-            f"{avail[i][1]['icon']} {avail[i][1]['name']} ({avail[i][2]})",
-            callback_data=f"svc:{avail[i][0]}", api_kwargs={"style": _svc_colors[i % 3]}
+            f"{avail[i][1]['icon']} {avail[i][1]['name']}",
+            callback_data=f"svc:{avail[i][0]}", style=_svc_colors[i % 3]
         ))
         if i+1 < len(avail):
             row.append(InlineKeyboardButton(
-                f"{avail[i+1][1]['icon']} {avail[i+1][1]['name']} ({avail[i+1][2]})",
-                callback_data=f"svc:{avail[i+1][0]}", api_kwargs={"style": _svc_colors[(i+1) % 3]}
+                f"{avail[i+1][1]['icon']} {avail[i+1][1]['name']}",
+                callback_data=f"svc:{avail[i+1][0]}", style=_svc_colors[(i+1) % 3]
             ))
         buttons.append(row)
 
+    import hub_features as _hub   # 🎨 Menu Design
+    _t, _pm, _rows, _ = _hub.menu("get_number", "🎯 *Select a Service*", "Markdown")
     await update.message.reply_text(
-        "🎯 *Select a Service*\n\n_(number in brackets = available count)_",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(buttons)
+        _t,
+        parse_mode=_pm,
+        reply_markup=InlineKeyboardMarkup(buttons + _rows)
     )
 
 # ─── cb_select_service — 3-COLOR FIX ───
@@ -1333,22 +1432,27 @@ async def cb_select_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
         row.append(InlineKeyboardButton(
             f"{c1['flag']} {c1['name']} ({p1:.2f}TK)",
             callback_data=f"cc:{svc_id}:{cc1}",
-            api_kwargs={"style": _cc_colors[i % 3]}
+            style=_cc_colors[i % 3]
         ))
         if i+1 < len(ccs):
             cc2 = ccs[i+1]; c2 = countries[cc2]; p2 = get_otp_price(cc2)
             row.append(InlineKeyboardButton(
                 f"{c2['flag']} {c2['name']} ({p2:.2f}TK)",
                 callback_data=f"cc:{svc_id}:{cc2}",
-                api_kwargs={"style": _cc_colors[(i+1) % 3]}
+                style=_cc_colors[(i+1) % 3]
             ))
         buttons.append(row)
-    buttons.append([InlineKeyboardButton("🔙 Back", callback_data="back_services", api_kwargs={"style": "danger"})])
+    buttons.append([InlineKeyboardButton("🔙 Back", callback_data="back_services", style="danger")])
 
+    import hub_features as _hub   # 🎨 Menu Design
+    _t, _pm, _rows, _ = _hub.menu(
+        "select_country",
+        f"{svc['icon']} *{svc['name']}* — Select Country\n\n_(taka = earnings per OTP)_", "Markdown",
+        service=svc['name'], icon=svc['icon'])
     await query.edit_message_text(
-        f"{svc['icon']} *{svc['name']}* — Select Country\n\n_(taka = earnings per OTP)_",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(buttons)
+        _t,
+        parse_mode=_pm,
+        reply_markup=InlineKeyboardMarkup(buttons + _rows)
     )
 
 async def cb_select_country(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1401,22 +1505,26 @@ async def cb_select_country(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rows = []
         for n in nums:
             if wa_result:
-                icon = "📱" if wa_result.get(n) is True else ("❌" if wa_result.get(n) is False else "⬜")
+                status = wa_result.get(n)
+                icon  = "📱" if status is True else ("❌" if status is False else "⬜")
+                style = "success" if status is True else ("danger" if status is False else "primary")
             else:
-                icon = "⏳" if wa_connected else "📋"
+                icon  = "⏳" if wa_connected else "📋"
+                style = "primary"
             rows.append([InlineKeyboardButton(
                 text=f"{icon} +{n}",
-                copy_text=CopyTextButton(text=f"+{n}")
+                copy_text=CopyTextButton(text=f"+{n}"),
+                style=style
             )])
         return rows
 
     bottom_buttons = [
-        [InlineKeyboardButton("📨 Open OTP Group", url=OTP_GROUP, api_kwargs={"style": "primary"})],
-        [InlineKeyboardButton("🔄 Get New Numbers", callback_data=f"newnum:{svc_id}:{cc}", api_kwargs={"style": "success"})],
-        [InlineKeyboardButton("🔙 Service List", callback_data="back_services", api_kwargs={"style": "danger"})],
+        [InlineKeyboardButton("📨 Open OTP Group", url=OTP_GROUP, style="primary")],
+        [InlineKeyboardButton("🔄 Get New Numbers", callback_data=f"newnum:{svc_id}:{cc}", style="success")],
+        [InlineKeyboardButton("🔙 Service List", callback_data="back_services", style="danger")],
     ]
     if not wa_connected:
-        bottom_buttons.append([InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect", api_kwargs={"style": "primary"})])
+        bottom_buttons.append([InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect", style="primary")])
 
     buttons = make_copy_buttons() + bottom_buttons
     await query.edit_message_text(make_msg(), parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
@@ -1488,22 +1596,26 @@ async def cb_new_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rows = []
         for n in nums:
             if wa_result:
-                icon = "📱" if wa_result.get(n) is True else ("❌" if wa_result.get(n) is False else "⬜")
+                status = wa_result.get(n)
+                icon  = "📱" if status is True else ("❌" if status is False else "⬜")
+                style = "success" if status is True else ("danger" if status is False else "primary")
             else:
-                icon = "⏳" if wa_connected else "📋"
+                icon  = "⏳" if wa_connected else "📋"
+                style = "primary"
             rows.append([InlineKeyboardButton(
                 text=f"{icon} +{n}",
-                copy_text=CopyTextButton(text=f"+{n}")
+                copy_text=CopyTextButton(text=f"+{n}"),
+                style=style
             )])
         return rows
 
     bottom_buttons_new = [
-        [InlineKeyboardButton("📨 Open OTP Group", url=OTP_GROUP, api_kwargs={"style": "primary"})],
-        [InlineKeyboardButton("🔄 Get New Numbers", callback_data=f"newnum:{svc_id}:{cc}", api_kwargs={"style": "success"})],
-        [InlineKeyboardButton("🔙 Service List", callback_data="back_services", api_kwargs={"style": "danger"})],
+        [InlineKeyboardButton("📨 Open OTP Group", url=OTP_GROUP, style="primary")],
+        [InlineKeyboardButton("🔄 Get New Numbers", callback_data=f"newnum:{svc_id}:{cc}", style="success")],
+        [InlineKeyboardButton("🔙 Service List", callback_data="back_services", style="danger")],
     ]
     if not wa_connected:
-        bottom_buttons_new.append([InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect", api_kwargs={"style": "primary"})])
+        bottom_buttons_new.append([InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect", style="primary")])
 
     buttons = make_copy_buttons_new() + bottom_buttons_new
     await query.edit_message_text(make_msg_new(), parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
@@ -1543,18 +1655,18 @@ async def cb_back_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for i in range(0, len(avail), 2):
         row = []
         row.append(InlineKeyboardButton(
-            f"{avail[i][1]['icon']} {avail[i][1]['name']} ({avail[i][2]})",
-            callback_data=f"svc:{avail[i][0]}", api_kwargs={"style": _svc_colors[i % 3]}
+            f"{avail[i][1]['icon']} {avail[i][1]['name']}",
+            callback_data=f"svc:{avail[i][0]}", style=_svc_colors[i % 3]
         ))
         if i+1 < len(avail):
             row.append(InlineKeyboardButton(
-                f"{avail[i+1][1]['icon']} {avail[i+1][1]['name']} ({avail[i+1][2]})",
-                callback_data=f"svc:{avail[i+1][0]}", api_kwargs={"style": _svc_colors[(i+1) % 3]}
+                f"{avail[i+1][1]['icon']} {avail[i+1][1]['name']}",
+                callback_data=f"svc:{avail[i+1][0]}", style=_svc_colors[(i+1) % 3]
             ))
         buttons.append(row)
 
     await query.edit_message_text(
-        "🎯 *Select a Service*\n\n_(number in brackets = available count)_",
+        "🎯 *Select a Service*",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(buttons)
     )
@@ -1581,8 +1693,8 @@ async def handle_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📌 *Minimum Withdraw:* {settings['minWithdraw']} taka",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("💸 Withdraw", callback_data="start_withdraw", api_kwargs={"style": "danger"})],
-            [InlineKeyboardButton("📋 Withdraw History", callback_data="withdraw_history", api_kwargs={"style": "primary"})],
+            [InlineKeyboardButton("💸 Withdraw", callback_data="start_withdraw", style="danger")],
+            [InlineKeyboardButton("📋 Withdraw History", callback_data="withdraw_history", style="primary")],
         ])
     )
 
@@ -1629,8 +1741,8 @@ async def handle_referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg,
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔗 Share Referral Link", url=f"https://t.me/share/url?url={urllib.parse.quote(ref_link)}&text={urllib.parse.quote(f'আমার referral link দিয়ে join করো এবং OTP থেকে আয় করো!')}", api_kwargs={"style": "success"})],
-            [InlineKeyboardButton("📊 Referral Stats", callback_data="ref_stats", api_kwargs={"style": "danger"})],
+            [InlineKeyboardButton("🔗 Share Referral Link", url=f"https://t.me/share/url?url={urllib.parse.quote(ref_link)}&text={urllib.parse.quote(f'আমার referral link দিয়ে join করো এবং OTP থেকে আয় করো!')}", style="success")],
+            [InlineKeyboardButton("📊 Referral Stats", callback_data="ref_stats", style="danger")],
         ])
     )
 
@@ -1671,8 +1783,8 @@ async def cb_ref_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         msg, parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔗 Share Link", url=f"https://t.me/share/url?url={urllib.parse.quote(ref_link)}", api_kwargs={"style": "primary"})],
-            [InlineKeyboardButton("🔙 Back", callback_data="goto_main", api_kwargs={"style": "success"})],
+            [InlineKeyboardButton("🔗 Share Link", url=f"https://t.me/share/url?url={urllib.parse.quote(ref_link)}", style="primary")],
+            [InlineKeyboardButton("🔙 Back", callback_data="goto_main", style="success")],
         ])
     )
 
@@ -1695,14 +1807,16 @@ async def handle_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
 
+    import hub_features as _hub   # 🎨 Menu Design + 💳 W. Methods
+    _t, _pm, _rows, _ = _hub.menu(
+        "withdrawal", f"💸 *Withdraw*\n\n💵 Balance: *{e['balance']:.2f} taka*\n\nChoose method:", "Markdown",
+        balance=f"{e['balance']:.2f}", min_withdraw=settings["minWithdraw"], user_id=uid)
     await update.message.reply_text(
-        f"💸 *Withdraw*\n\n💵 Balance: *{e['balance']:.2f} taka*\n\nChoose method:",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🟣 bKash", callback_data="wm:bKash", api_kwargs={"style": "danger"}),
-             InlineKeyboardButton("🟠 Nagad", callback_data="wm:Nagad", api_kwargs={"style": "primary"})],
-            [InlineKeyboardButton("❌ Cancel", callback_data="w_cancel", api_kwargs={"style": "success"})],
-        ])
+        _t,
+        parse_mode=_pm,
+        reply_markup=InlineKeyboardMarkup(
+            _hub.method_rows() + [[InlineKeyboardButton("❌ Cancel", callback_data="w_cancel", style="success")]] + _rows
+        )
     )
 
 async def cb_withdraw_method(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1723,14 +1837,14 @@ async def cb_withdraw_method(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     rows = []
     for i in range(0, len(amounts), 2):
-        row = [InlineKeyboardButton(f"{amounts[i]} taka", callback_data=f"wa:{method}:{amounts[i]}", api_kwargs={"style": "primary"})]
+        row = [InlineKeyboardButton(f"{amounts[i]} taka", callback_data=f"wa:{method}:{amounts[i]}", style="primary")]
         if i+1 < len(amounts):
-            row.append(InlineKeyboardButton(f"{amounts[i+1]} taka", callback_data=f"wa:{method}:{amounts[i+1]}", api_kwargs={"style": "success"}))
+            row.append(InlineKeyboardButton(f"{amounts[i+1]} taka", callback_data=f"wa:{method}:{amounts[i+1]}", style="success"))
         rows.append(row)
-    rows.append([InlineKeyboardButton(f"💰 All ({e['balance']:.2f} taka)", callback_data=f"wa:{method}:{e['balance']:.2f}", api_kwargs={"style": "danger"})])
-    rows.append([InlineKeyboardButton("❌ Cancel", callback_data="w_cancel", api_kwargs={"style": "primary"})])
+    rows.append([InlineKeyboardButton(f"💰 All ({e['balance']:.2f} taka)", callback_data=f"wa:{method}:{e['balance']:.2f}", style="danger")])
+    rows.append([InlineKeyboardButton("❌ Cancel", callback_data="w_cancel", style="primary")])
 
-    icon = "🟣" if method == "bKash" else "🟠"
+    icon = __import__("hub_features").method_icon(method)
     await query.edit_message_text(
         f"{icon} *{method} Withdrawal*\n\n💵 Balance: *{e['balance']:.2f} taka*\n\nSelect amount or type in chat:",
         parse_mode="Markdown",
@@ -1753,12 +1867,12 @@ async def cb_withdraw_amount(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     sess["state"] = "w_account"
     sess["data"]  = {"method": method, "amount": amount}
-    icon = "🟣" if method == "bKash" else "🟠"
+    icon = __import__("hub_features").method_icon(method)
 
     await query.edit_message_text(
         f"{icon} *{method} — {amount:.2f} taka*\n\n📱 Your *{method} number:*\nExample: `01712345678`",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="w_cancel", api_kwargs={"style": "success"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="w_cancel", style="success")]])
     )
 
 async def cb_withdraw_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1787,7 +1901,7 @@ async def cb_withdraw_history(update: Update, context: ContextTypes.DEFAULT_TYPE
             text += f"📱 `{w['account']}` | {date}\n\n"
 
     await query.edit_message_text(text, parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="goto_main", api_kwargs={"style": "danger"})]]))
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="goto_main", style="danger")]]))
 
 async def cb_start_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1809,11 +1923,10 @@ async def cb_start_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         f"💸 *Withdraw*\n\n💵 Balance: *{e['balance']:.2f} taka*\n\nChoose method:",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🟣 bKash", callback_data="wm:bKash", api_kwargs={"style": "primary"}),
-             InlineKeyboardButton("🟠 Nagad", callback_data="wm:Nagad", api_kwargs={"style": "success"})],
-            [InlineKeyboardButton("❌ Cancel", callback_data="w_cancel", api_kwargs={"style": "danger"})],
-        ])
+        reply_markup=InlineKeyboardMarkup(
+            __import__("hub_features").method_rows(("primary", "success"))
+            + [[InlineKeyboardButton("❌ Cancel", callback_data="w_cancel", style="danger")]]
+        )
     )
 
 # ─── WhatsApp Connect ───
@@ -1829,8 +1942,8 @@ async def cb_wa_connect(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Disconnect করতে নিচের বাটন চাপো:",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔴 Logout / Disconnect", callback_data="wa_disconnect", api_kwargs={"style": "primary"})],
-                [InlineKeyboardButton("📊 Check Status", callback_data="wa_status", api_kwargs={"style": "success"})],
+                [InlineKeyboardButton("🔴 Logout / Disconnect", callback_data="wa_disconnect", style="primary")],
+                [InlineKeyboardButton("📊 Check Status", callback_data="wa_status", style="success")],
             ])
         )
         return
@@ -1863,8 +1976,8 @@ async def cb_wa_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "notAuthorized": "🔴 *WhatsApp connected নেই।*\n\nCode enter করলে আবার Check Status চাপো।",
     }
     text = STATE_MAP.get(state, f"❓ Unknown state: {state}")
-    btns = [[InlineKeyboardButton("🔴 Disconnect", callback_data="wa_disconnect", api_kwargs={"style": "danger"})]] if conn else \
-           [[InlineKeyboardButton("📱 Connect", callback_data="wa_connect", api_kwargs={"style": "primary"})]]
+    btns = [[InlineKeyboardButton("🔴 Disconnect", callback_data="wa_disconnect", style="danger")]] if conn else \
+           [[InlineKeyboardButton("📱 Connect", callback_data="wa_connect", style="primary")]]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(btns))
 
 async def cb_wa_disconnect(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1887,7 +2000,7 @@ async def cb_wa_disconnect(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "আবার connect করতে নিচের বাটন চাপো:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect", api_kwargs={"style": "success"})],
+            [InlineKeyboardButton("📱 Connect WhatsApp", callback_data="wa_connect", style="success")],
         ])
     )
 
@@ -1904,17 +2017,17 @@ async def handle_tempmail(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📧 *Temporary Email*\n\n📌 Your email:\n`{existing['address']}`",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📬 Check Inbox", callback_data="tm_inbox", api_kwargs={"style": "danger"})],
-                [InlineKeyboardButton("📋 Show Email", callback_data="tm_show", api_kwargs={"style": "primary"})],
-                [InlineKeyboardButton("🔄 Get New Email", callback_data="tm_create", api_kwargs={"style": "success"})],
-                [InlineKeyboardButton("🗑️ Delete Email", callback_data="tm_delete", api_kwargs={"style": "danger"})],
+                [InlineKeyboardButton("📬 Check Inbox", callback_data="tm_inbox", style="danger")],
+                [InlineKeyboardButton("📋 Show Email", callback_data="tm_show", style="primary")],
+                [InlineKeyboardButton("🔄 Get New Email", callback_data="tm_create", style="success")],
+                [InlineKeyboardButton("🗑️ Delete Email", callback_data="tm_delete", style="danger")],
             ])
         )
     else:
         await update.message.reply_text(
             "📧 *Temporary Email*\n\n✅ Create a new disposable email address.",
             parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🆕 Create New Email", callback_data="tm_create", api_kwargs={"style": "primary"})]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🆕 Create New Email", callback_data="tm_create", style="primary")]])
         )
 
 async def cb_tm_create(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1931,7 +2044,7 @@ async def cb_tm_create(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "❌ *Email creation failed.* Please try again.",
                     chat_id=uid, message_id=loading.message_id,
                     parse_mode="Markdown",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Retry", callback_data="tm_create", api_kwargs={"style": "success"})]])
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Retry", callback_data="tm_create", style="success")]])
                 )
                 return
             temp_mails[uid] = new_email
@@ -1941,9 +2054,9 @@ async def cb_tm_create(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=uid, message_id=loading.message_id,
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("📬 Check Inbox", callback_data="tm_inbox", api_kwargs={"style": "danger"})],
-                    [InlineKeyboardButton("🔄 Get New Email", callback_data="tm_create", api_kwargs={"style": "primary"})],
-                    [InlineKeyboardButton("🗑️ Delete", callback_data="tm_delete", api_kwargs={"style": "success"})],
+                    [InlineKeyboardButton("📬 Check Inbox", callback_data="tm_inbox", style="danger")],
+                    [InlineKeyboardButton("🔄 Get New Email", callback_data="tm_create", style="primary")],
+                    [InlineKeyboardButton("🗑️ Delete", callback_data="tm_delete", style="success")],
                 ])
             )
         except Exception as e:
@@ -1967,7 +2080,7 @@ async def cb_tm_inbox(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid not in temp_mails:
         return await query.edit_message_text(
             "❌ No email found.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🆕 Create", callback_data="tm_create", api_kwargs={"style": "danger"})]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🆕 Create", callback_data="tm_create", style="danger")]])
         )
 
     email_obj = temp_mails[uid]
@@ -1993,9 +2106,9 @@ async def cb_tm_inbox(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             try:
                 await query.edit_message_text(text[:4000], parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔄 Refresh", callback_data="tm_inbox", api_kwargs={"style": "primary"})],
-                    [InlineKeyboardButton("🔄 New Email", callback_data="tm_create", api_kwargs={"style": "success"})],
-                    [InlineKeyboardButton("🗑️ Delete", callback_data="tm_delete", api_kwargs={"style": "danger"})],
+                    [InlineKeyboardButton("🔄 Refresh", callback_data="tm_inbox", style="primary")],
+                    [InlineKeyboardButton("🔄 New Email", callback_data="tm_create", style="success")],
+                    [InlineKeyboardButton("🗑️ Delete", callback_data="tm_delete", style="danger")],
                 ]))
             except:
                 pass
@@ -2015,8 +2128,8 @@ async def cb_tm_show(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📧 *Your Temp Email:*\n\n`{addr}`",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📬 Check Inbox", callback_data="tm_inbox", api_kwargs={"style": "primary"})],
-            [InlineKeyboardButton("🔄 New Email", callback_data="tm_create", api_kwargs={"style": "success"})],
+            [InlineKeyboardButton("📬 Check Inbox", callback_data="tm_inbox", style="primary")],
+            [InlineKeyboardButton("🔄 New Email", callback_data="tm_create", style="success")],
         ])
     )
 
@@ -2037,10 +2150,10 @@ async def handle_2fa(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔐 *2-Step Verification Code Generator*\n\nSelect a service:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📘 Facebook 2FA", callback_data="totp:facebook", api_kwargs={"style": "danger"})],
-            [InlineKeyboardButton("📸 Instagram 2FA", callback_data="totp:instagram", api_kwargs={"style": "primary"})],
-            [InlineKeyboardButton("🔍 Google 2FA", callback_data="totp:google", api_kwargs={"style": "success"})],
-            [InlineKeyboardButton("⚙️ Other 2FA", callback_data="totp:other", api_kwargs={"style": "danger"})],
+            [InlineKeyboardButton("📘 Facebook 2FA", callback_data="totp:facebook", style="danger")],
+            [InlineKeyboardButton("📸 Instagram 2FA", callback_data="totp:instagram", style="primary")],
+            [InlineKeyboardButton("🔍 Google 2FA", callback_data="totp:google", style="success")],
+            [InlineKeyboardButton("⚙️ Other 2FA", callback_data="totp:other", style="danger")],
         ])
     )
 
@@ -2068,7 +2181,7 @@ async def cb_totp_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔑 It looks like: `JBSWY3DPEHPK3PXP`\n\n"
         f"Type /cancel to cancel",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="totp_back", api_kwargs={"style": "primary"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="totp_back", style="primary")]])
     )
 
 async def cb_totp_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2078,10 +2191,10 @@ async def cb_totp_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔐 *2FA Code Generator*\n\nSelect a service:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📘 Facebook 2FA", callback_data="totp:facebook", api_kwargs={"style": "success"})],
-            [InlineKeyboardButton("📸 Instagram 2FA", callback_data="totp:instagram", api_kwargs={"style": "danger"})],
-            [InlineKeyboardButton("🔍 Google 2FA", callback_data="totp:google", api_kwargs={"style": "primary"})],
-            [InlineKeyboardButton("⚙️ Other 2FA", callback_data="totp:other", api_kwargs={"style": "success"})],
+            [InlineKeyboardButton("📘 Facebook 2FA", callback_data="totp:facebook", style="success")],
+            [InlineKeyboardButton("📸 Instagram 2FA", callback_data="totp:instagram", style="danger")],
+            [InlineKeyboardButton("🔍 Google 2FA", callback_data="totp:google", style="primary")],
+            [InlineKeyboardButton("⚙️ Other 2FA", callback_data="totp:other", style="success")],
         ])
     )
 
@@ -2093,7 +2206,7 @@ async def cb_totp_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if secret_enc == "TOOLONG":
         await query.edit_message_text(
             "⚠️ Secret key টি অনেক বড়। Refresh করতে আবার 🔐 2FA বাটন চাপুন।",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="totp_back", api_kwargs={"style": "danger"})]]))
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="totp_back", style="danger")]]))
         return
 
     secret = urllib.parse.unquote(secret_enc)
@@ -2116,8 +2229,8 @@ async def cb_totp_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⏰ *{result['timeRemaining']} seconds remaining*",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔄 Refresh Code", callback_data=cb_data, api_kwargs={"style": "primary"})],
-                [InlineKeyboardButton("🔙 Back", callback_data="totp_back", api_kwargs={"style": "success"})],
+                [InlineKeyboardButton("🔄 Refresh Code", callback_data=cb_data, style="primary")],
+                [InlineKeyboardButton("🔙 Back", callback_data="totp_back", style="success")],
             ])
         )
     except:
@@ -2125,10 +2238,12 @@ async def cb_totp_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ─── Support ───
 async def handle_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    import hub_features as _hub   # 🎨 Menu Design
+    _t, _pm, _rows, _ = _hub.menu("support", "💬 *Support*\n\nContact admin:\n📌 @sadhin8miya", "Markdown")
     await update.message.reply_text(
-        "💬 *Support*\n\nContact admin:\n📌 @Abuhu_Raira_admin03",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Contact", url="https://t.me/Abuhu_Raira_admin03", api_kwargs={"style": "danger"})]])
+        _t,
+        parse_mode=_pm,
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Contact", url="https://t.me/sadhin8miya", style="danger")]] + _rows)
     )
 
 # ─── Admin Callbacks ───
@@ -2161,8 +2276,8 @@ async def cb_admin_stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
         report = report[:3950] + "\n..._truncated_"
 
     await safe_edit(query, report, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔄 Refresh", callback_data="admin_stock", api_kwargs={"style": "primary"})],
-        [InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "success"})],
+        [InlineKeyboardButton("🔄 Refresh", callback_data="admin_stock", style="primary")],
+        [InlineKeyboardButton("🔙 Back", callback_data="admin_back", style="success")],
     ]))
 
 async def cb_admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2195,8 +2310,8 @@ async def cb_admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg = msg[:3950] + "..._truncated_"
 
         await safe_edit(query, msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 Refresh", callback_data="admin_users", api_kwargs={"style": "danger"})],
-            [InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "primary"})],
+            [InlineKeyboardButton("🔄 Refresh", callback_data="admin_users", style="danger")],
+            [InlineKeyboardButton("🔙 Back", callback_data="admin_back", style="primary")],
         ]))
     except Exception as e:
         logger.error(f"cb_admin_users error: {e}", exc_info=True)
@@ -2204,7 +2319,7 @@ async def cb_admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(
                 f"❌ *Error loading user stats*\n\n`{str(e)[:200]}`",
                 parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "success"})]])
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_back", style="success")]])
             )
         except:
             pass
@@ -2225,8 +2340,8 @@ async def cb_admin_otp_log(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg += f"🕐 {get_time_ago(log.get('timestamp',''))}\n\n"
 
     await safe_edit(query, msg[:4000], parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔄 Refresh", callback_data="admin_otp_log", api_kwargs={"style": "danger"})],
-        [InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "primary"})],
+        [InlineKeyboardButton("🔄 Refresh", callback_data="admin_otp_log", style="danger")],
+        [InlineKeyboardButton("🔙 Back", callback_data="admin_back", style="primary")],
     ]))
 
 async def cb_admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2240,7 +2355,7 @@ async def cb_admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.edit_message_text(
         "📢 *Broadcast Message*\n\nSend the message to broadcast to all users:",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "success"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="success")]])
     )
 
 async def cb_admin_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2259,17 +2374,23 @@ async def cb_admin_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💵 OTP Price: *{settings.get('defaultOtpPrice', 0.25):.2f} taka*\n"
         f"💸 Min Withdraw: *{settings['minWithdraw']} taka*\n"
         f"🏧 Withdraw: *{'Enabled ✅' if settings['withdrawEnabled'] else 'Disabled ❌'}*\n"
-        f"👥 Referral Commission: *{commission}%*",
+        f"👥 Referral Commission: *{commission}%*\n"
+        f"📡 Panel Poll Interval: *{settings.get('panelPollInterval', 1)} sec*\n"
+        f"📥 Queue Retry Interval: *{settings.get('queueRetryInterval', 1)} sec*\n"
+        f"🗑️ Queue Expiry: *{settings.get('queueExpiryHours', 3)} hours*",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📞 Number Count", callback_data="as_count", api_kwargs={"style": "danger"}),
-             InlineKeyboardButton("⏱ Cooldown", callback_data="as_cooldown", api_kwargs={"style": "primary"})],
-            [InlineKeyboardButton(f"🔐 Verification {'Disable' if settings['requireVerification'] else 'Enable'}", callback_data="as_toggle_verify", api_kwargs={"style": "success"})],
-            [InlineKeyboardButton("💵 OTP Price", callback_data="as_price", api_kwargs={"style": "danger"}),
-             InlineKeyboardButton("💸 Min Withdraw", callback_data="as_minw", api_kwargs={"style": "primary"})],
-            [InlineKeyboardButton(f"🏧 Withdraw {'🔴 Disable' if settings['withdrawEnabled'] else '🟢 Enable'}", callback_data="as_toggle_withdraw", api_kwargs={"style": "success"})],
-            [InlineKeyboardButton(f"👥 Referral Commission ({commission}%)", callback_data="as_referral_commission", api_kwargs={"style": "danger"})],
-            [InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "primary"})],
+            [InlineKeyboardButton("📞 Number Count", callback_data="as_count", style="danger"),
+             InlineKeyboardButton("⏱ Cooldown", callback_data="as_cooldown", style="primary")],
+            [InlineKeyboardButton(f"🔐 Verification {'Disable' if settings['requireVerification'] else 'Enable'}", callback_data="as_toggle_verify", style="success")],
+            [InlineKeyboardButton("💵 OTP Price", callback_data="as_price", style="danger"),
+             InlineKeyboardButton("💸 Min Withdraw", callback_data="as_minw", style="primary")],
+            [InlineKeyboardButton(f"🏧 Withdraw {'🔴 Disable' if settings['withdrawEnabled'] else '🟢 Enable'}", callback_data="as_toggle_withdraw", style="success")],
+            [InlineKeyboardButton(f"👥 Referral Commission ({commission}%)", callback_data="as_referral_commission", style="danger")],
+            [InlineKeyboardButton("📡 Panel Poll Interval", callback_data="as_panel_interval", style="primary"),
+             InlineKeyboardButton("📥 Queue Retry Interval", callback_data="as_queue_interval", style="success")],
+            [InlineKeyboardButton("🗑️ Queue Expiry (hours)", callback_data="as_queue_expiry", style="danger")],
+            [InlineKeyboardButton("🔙 Back", callback_data="admin_back", style="primary")],
         ])
     )
 
@@ -2307,7 +2428,58 @@ async def cb_as_referral_commission(update: Update, context: ContextTypes.DEFAUL
         f"Send new commission percentage (0-50):\n"
         f"Example: `10` means 10%",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "success"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="success")]])
+    )
+
+async def cb_as_panel_interval(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    uid = str(update.effective_user.id)
+    if not get_session(uid)["is_admin"] and not is_admin(uid):
+        return await query.answer("❌ Admin only")
+    await query.answer()
+    get_session(uid)["state"] = "admin_set_panel_interval"
+    current = settings.get("panelPollInterval", 1)
+    await query.edit_message_text(
+        f"📡 *Set Panel Poll Interval*\n\n"
+        f"Current: *{current} sec*\n\n"
+        f"প্যানেল কত সেকেন্ড পরপর নতুন SMS/OTP চেক করবে সেই সংখ্যা দাও:\n"
+        f"Example: `1`",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="success")]])
+    )
+
+async def cb_as_queue_interval(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    uid = str(update.effective_user.id)
+    if not get_session(uid)["is_admin"] and not is_admin(uid):
+        return await query.answer("❌ Admin only")
+    await query.answer()
+    get_session(uid)["state"] = "admin_set_queue_interval"
+    current = settings.get("queueRetryInterval", 1)
+    await query.edit_message_text(
+        f"📥 *Set Queue Retry Interval*\n\n"
+        f"Current: *{current} sec*\n\n"
+        f"pending DM/Group queue কত সেকেন্ড পরপর চেক/ফ্লাশ করবে সেই সংখ্যা দাও:\n"
+        f"Example: `1`",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="success")]])
+    )
+
+async def cb_as_queue_expiry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    uid = str(update.effective_user.id)
+    if not get_session(uid)["is_admin"] and not is_admin(uid):
+        return await query.answer("❌ Admin only")
+    await query.answer()
+    get_session(uid)["state"] = "admin_set_queue_expiry"
+    current = settings.get("queueExpiryHours", 3)
+    await query.edit_message_text(
+        f"🗑️ *Set Queue Expiry*\n\n"
+        f"Current: *{current} hours*\n\n"
+        f"কতক্ষণ (ঘন্টা) চেষ্টা করার পরও না গেলে queue থেকে entry বাদ দিবে সেই সংখ্যা দাও:\n"
+        f"Example: `3`",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="success")]])
     )
 
 async def cb_admin_referral_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2348,8 +2520,8 @@ async def cb_admin_referral_stats(update: Update, context: ContextTypes.DEFAULT_
     await query.edit_message_text(
         msg, parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton(f"⚙️ Set Commission ({commission}%)", callback_data="as_referral_commission", api_kwargs={"style": "danger"})],
-            [InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "primary"})],
+            [InlineKeyboardButton(f"⚙️ Set Commission ({commission}%)", callback_data="as_referral_commission", style="danger")],
+            [InlineKeyboardButton("🔙 Back", callback_data="admin_back", style="primary")],
         ])
     )
 
@@ -2363,7 +2535,7 @@ async def cb_as_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         f"📞 *Set Number Count*\n\nCurrent: *{settings['defaultNumberCount']}*\n\nSend new count (1-100):",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "success"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="success")]])
     )
 
 async def cb_as_cooldown(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2376,7 +2548,7 @@ async def cb_as_cooldown(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         f"⏱ *Set Cooldown*\n\nCurrent: *{settings['cooldownSeconds']} seconds*\n\nSend new cooldown (1-3600):",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "danger"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="danger")]])
     )
 
 async def cb_as_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2389,7 +2561,7 @@ async def cb_as_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         f"💵 *Set Default OTP Price*\n\nCurrent: *{settings.get('defaultOtpPrice', 0.25):.2f} taka*\n\nSend new price:",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "primary"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="primary")]])
     )
 
 async def cb_as_minw(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2402,7 +2574,7 @@ async def cb_as_minw(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         f"💸 *Set Min Withdraw*\n\nCurrent: *{settings['minWithdraw']} taka*\n\nSend new minimum:",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "success"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="success")]])
     )
 
 async def cb_admin_add_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2415,7 +2587,7 @@ async def cb_admin_add_numbers(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.edit_message_text(
         "➕ *Add Numbers*\n\nFormat:\n`[number]|[country code]|[service]`\n\nExample:\n`8801712345678|880|whatsapp`",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "danger"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="danger")]])
     )
 
 async def cb_admin_withdrawals(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2436,10 +2608,10 @@ async def cb_admin_withdrawals(update: Update, context: ContextTypes.DEFAULT_TYP
     buttons = []
     for w in pending[:5]:
         buttons.append([
-            InlineKeyboardButton(f"✅ {w['id'][-6:]}", callback_data=f"wadm_approve:{w['id']}", api_kwargs={"style": "primary"}),
-            InlineKeyboardButton(f"❌ {w['id'][-6:]}", callback_data=f"wadm_reject:{w['id']}", api_kwargs={"style": "success"}),
+            InlineKeyboardButton(f"✅ {w['id'][-6:]}", callback_data=f"wadm_approve:{w['id']}", style="primary"),
+            InlineKeyboardButton(f"❌ {w['id'][-6:]}", callback_data=f"wadm_reject:{w['id']}", style="success"),
         ])
-    buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "danger"})])
+    buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_back", style="danger")])
 
     await query.edit_message_text(msg[:4000], parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
 
@@ -2498,10 +2670,10 @@ async def cb_admin_balance_manage(update: Update, context: ContextTypes.DEFAULT_
         "👛 *Balance Management*\n\nSelect action:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ Add Balance", callback_data="bal_add", api_kwargs={"style": "primary"}),
-             InlineKeyboardButton("➖ Deduct Balance", callback_data="bal_deduct", api_kwargs={"style": "success"})],
-            [InlineKeyboardButton("🔄 Reset Balance", callback_data="bal_reset", api_kwargs={"style": "danger"})],
-            [InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "primary"})],
+            [InlineKeyboardButton("➕ Add Balance", callback_data="bal_add", style="primary"),
+             InlineKeyboardButton("➖ Deduct Balance", callback_data="bal_deduct", style="success")],
+            [InlineKeyboardButton("🔄 Reset Balance", callback_data="bal_reset", style="danger")],
+            [InlineKeyboardButton("🔙 Back", callback_data="admin_back", style="primary")],
         ])
     )
 
@@ -2515,7 +2687,7 @@ async def cb_bal_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         "➕ *Add Balance*\n\nFormat: `[userId] [amount]`\nExample: `123456789 50`",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "success"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="success")]])
     )
 
 async def cb_bal_deduct(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2528,7 +2700,7 @@ async def cb_bal_deduct(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         "➖ *Deduct Balance*\n\nFormat: `[userId] [amount]`",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "danger"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="danger")]])
     )
 
 async def cb_bal_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2541,7 +2713,7 @@ async def cb_bal_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         "🔄 *Reset Balance*\n\nSend the userId:",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "primary"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="primary")]])
     )
 
 async def cb_admin_country_prices(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2558,7 +2730,7 @@ async def cb_admin_country_prices(update: Update, context: ContextTypes.DEFAULT_
     text += "\nSend new prices (format: `880 0.50`):"
 
     await query.edit_message_text(text, parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "success"})]]))
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="success")]]))
 
 async def cb_admin_manage_countries(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -2570,9 +2742,9 @@ async def cb_admin_manage_countries(update: Update, context: ContextTypes.DEFAUL
         f"🌍 *Manage Countries*\n\nTotal: *{len(countries)}*",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ Add Country", callback_data="country_add", api_kwargs={"style": "danger"}),
-             InlineKeyboardButton("📋 List Countries", callback_data="country_list", api_kwargs={"style": "primary"})],
-            [InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "success"})],
+            [InlineKeyboardButton("➕ Add Country", callback_data="country_add", style="danger"),
+             InlineKeyboardButton("📋 List Countries", callback_data="country_list", style="primary")],
+            [InlineKeyboardButton("🔙 Back", callback_data="admin_back", style="success")],
         ])
     )
 
@@ -2584,7 +2756,7 @@ async def cb_country_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         p = country_prices.get(cc, settings.get("defaultOtpPrice", 0.25))
         text += f"{c['flag']} *{c['name']}* (+{cc}) — {p:.2f} TK/OTP\n"
     await query.edit_message_text(text[:4000], parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_manage_countries", api_kwargs={"style": "danger"})]]))
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_manage_countries", style="danger")]]))
 
 async def cb_country_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -2594,7 +2766,7 @@ async def cb_country_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         "🌍 *Add Country*\n\nFormat: `[code] [name] [flag]`\nExample: `880 Bangladesh 🇧🇩`",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "primary"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="primary")]])
     )
 
 async def cb_admin_manage_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2607,9 +2779,9 @@ async def cb_admin_manage_services(update: Update, context: ContextTypes.DEFAULT
         "🔧 *Manage Services*",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📋 List Services", callback_data="svc_list", api_kwargs={"style": "success"}),
-             InlineKeyboardButton("➕ Add Service", callback_data="svc_add", api_kwargs={"style": "danger"})],
-            [InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "primary"})],
+            [InlineKeyboardButton("📋 List Services", callback_data="svc_list", style="success"),
+             InlineKeyboardButton("➕ Add Service", callback_data="svc_add", style="danger")],
+            [InlineKeyboardButton("🔙 Back", callback_data="admin_back", style="primary")],
         ])
     )
 
@@ -2620,7 +2792,7 @@ async def cb_svc_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for svc_id, svc in services.items():
         text += f"• {svc['icon']} *{svc['name']}* (ID: `{svc_id}`)\n"
     await query.edit_message_text(text, parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_manage_services", api_kwargs={"style": "success"})]]))
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_manage_services", style="success")]]))
 
 async def cb_svc_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -2630,7 +2802,7 @@ async def cb_svc_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         "🔧 *Add Service*\n\nFormat: `[id] [name] [icon]`\nExample: `facebook Facebook 📘`",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "danger"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="danger")]])
     )
 
 async def cb_admin_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2642,9 +2814,9 @@ async def cb_admin_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sess = get_session(uid)
     sess["state"] = "admin_upload_select_service"
 
-    buttons = [[InlineKeyboardButton(f"{svc['icon']} {svc['name']}", callback_data=f"upload_svc:{svc_id}", api_kwargs={"style": "primary"})]
+    buttons = [[InlineKeyboardButton(f"{svc['icon']} {svc['name']}", callback_data=f"upload_svc:{svc_id}", style="primary")]
                for svc_id, svc in services.items()]
-    buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "success"})])
+    buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="success")])
     await query.edit_message_text("📤 *Upload Numbers*\n\nSelect service:", parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(buttons))
 
@@ -2660,7 +2832,7 @@ async def cb_upload_svc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         f"📤 *Upload Numbers for {svc['name']}*\n\nSend a .txt file with numbers (one per line).",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", api_kwargs={"style": "danger"})]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_cancel", style="danger")]])
     )
 
 async def cb_admin_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2678,7 +2850,7 @@ async def cb_admin_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     get_session(uid)["state"] = None
     get_session(uid)["data"]  = None
     await query.edit_message_text("❌ *Cancelled.*", parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🛠 Back to Admin", callback_data="admin_back", api_kwargs={"style": "primary"})]]))
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🛠 Back to Admin", callback_data="admin_back", style="primary")]]))
 
 async def cb_admin_logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -2702,9 +2874,9 @@ async def cb_admin_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if nums:
                 buttons.append([InlineKeyboardButton(
                     f"🗑️ +{cc}/{svc_id} ({len(nums)})",
-                    callback_data=f"del_confirm:{cc}:{svc_id}", api_kwargs={"style": "primary"}
+                    callback_data=f"del_confirm:{cc}:{svc_id}", style="primary"
                 )])
-    buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="admin_back", api_kwargs={"style": "success"})])
+    buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="admin_back", style="success")])
     await query.edit_message_text("🗑️ *Delete Numbers*\n\nSelect to delete:", parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(buttons))
 
@@ -2720,8 +2892,8 @@ async def cb_del_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"⚠️ *Confirm Deletion*\n\nDelete {count} numbers from +{cc}/{svc_id}?",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Yes", callback_data=f"del_exec:{cc}:{svc_id}", api_kwargs={"style": "danger"}),
-             InlineKeyboardButton("❌ No", callback_data="admin_back", api_kwargs={"style": "primary"})],
+            [InlineKeyboardButton("✅ Yes", callback_data=f"del_exec:{cc}:{svc_id}", style="danger"),
+             InlineKeyboardButton("❌ No", callback_data="admin_back", style="primary")],
         ])
     )
 
@@ -2739,7 +2911,7 @@ async def cb_del_exec(update: Update, context: ContextTypes.DEFAULT_TYPE):
             del numbers_by_cs[cc]
     await async_save_numbers()
     await query.edit_message_text(f"✅ *Deleted {count} numbers.*", parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "success"})]]))
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_back", style="success")]]))
 
 async def cb_goto_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -2751,14 +2923,81 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid  = str(update.effective_user.id)
     sess = get_session(uid)
 
+    if sess.get("state") == "admin_fake_numbers":
+        doc   = update.message.document
+        fname = (doc.file_name or "").lower()
+        if not (fname.endswith(".txt") or fname.endswith(".xlsx") or fname.endswith(".xls") or fname.endswith(".csv")):
+            return await update.message.reply_text("❌ শুধু .txt, .csv বা .xlsx/.xls ফাইল সাপোর্ট করে এখানে।")
+        file = await context.bot.get_file(doc.file_id)
+        raw  = await file.download_as_bytearray()
+
+        numbers = []
+        if fname.endswith(".xlsx") or fname.endswith(".xls"):
+            try:
+                import openpyxl, io
+                wb = openpyxl.load_workbook(io.BytesIO(bytes(raw)), read_only=True, data_only=True)
+                ws = wb.active
+                for row in ws.iter_rows(values_only=True):
+                    for cell in row:
+                        if cell is None:
+                            continue
+                        num = re.sub(r"\D", "", str(cell))
+                        if re.match(r"^\d{10,15}$", num) and num not in numbers:
+                            numbers.append(num)
+            except Exception as e:
+                return await update.message.reply_text(f"❌ Excel ফাইল পড়তে সমস্যা হয়েছে: {e}")
+        elif fname.endswith(".csv"):
+            import csv, io
+            text = bytes(raw).decode("utf-8", errors="ignore")
+            for row in csv.reader(io.StringIO(text)):
+                for cell in row:
+                    num = re.sub(r"\D", "", str(cell))
+                    if re.match(r"^\d{10,15}$", num) and num not in numbers:
+                        numbers.append(num)
+        else:
+            text = bytes(raw).decode("utf-8", errors="ignore")
+            for line in text.split("\n"):
+                num = re.sub(r"\D", "", line.strip())
+                if num and num not in numbers:
+                    numbers.append(num)
+
+        sess["state"] = None
+        fd = sess.pop("fake_data", {})
+        if not numbers:
+            sess["state"] = "admin_fake_numbers"
+            sess["fake_data"] = fd
+            return await update.message.reply_text("❌ ফাইলে কোনো ভ্যালিড নাম্বার পাওয়া যায়নি। আবার পাঠাও।")
+
+        batch = {
+            "numbers":     numbers,
+            "service":     fd.get("service", "other"),
+            "digits":      fd.get("digits", 5),
+            "max_minutes": fd.get("max_minutes", 5),
+            "status":      "running",
+        }
+        fake_otp_batches.append(batch)
+        save_fake_otp_batches()
+        idx = len(fake_otp_batches) - 1
+        fake_otp_tasks[idx] = asyncio.create_task(run_fake_otp_batch(idx, context.application))
+
+        svc = services.get(batch["service"], {"icon": "📱", "name": batch["service"]})
+        return await update.message.reply_text(
+            f"✅ *Fake OTP Batch #{idx+1} Added & Started!*\n\n"
+            f"{svc['icon']} Service: {svc['name']}\n"
+            f"🔢 Digits: {batch['digits']}\n"
+            f"⏱ Max Gap: {batch['max_minutes']} min\n"
+            f"📋 Numbers: {len(numbers)}টা (ফাইল থেকে)",
+            parse_mode="Markdown"
+        )
+
     if sess.get("state") != "admin_upload_file":
         return
 
     doc   = update.message.document
     fname = (doc.file_name or "").lower()
 
-    if not (fname.endswith(".txt") or fname.endswith(".xlsx") or fname.endswith(".xls")):
-        return await update.message.reply_text("❌ Only .txt or .xlsx files are supported.")
+    if not (fname.endswith(".txt") or fname.endswith(".xlsx") or fname.endswith(".xls") or fname.endswith(".csv")):
+        return await update.message.reply_text("❌ Only .txt, .csv or .xlsx files are supported.")
 
     svc_id = (sess.get("data") or {}).get("serviceId", "other")
     added  = 0
@@ -2788,6 +3027,25 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"XLSX parse error: {e}")
             return await update.message.reply_text(f"❌ Excel file read error: {e}")
+    elif fname.endswith(".csv"):
+        import csv, io
+        raw  = await file.download_as_bytearray()
+        text = bytes(raw).decode("utf-8", errors="ignore")
+        for i, row in enumerate(csv.reader(io.StringIO(text))):
+            if i == 0:
+                continue  # header row skip (xlsx এর মতোই)
+            for cell in row:
+                num = re.sub(r"\D", "", str(cell))
+                if not re.match(r"^\d{10,15}$", num):
+                    continue
+                cc = get_country_code_from_number(num)
+                if not cc:
+                    continue
+                numbers_by_cs.setdefault(cc, {}).setdefault(svc_id, [])
+                if num not in numbers_by_cs[cc][svc_id]:
+                    numbers_by_cs[cc][svc_id].append(num)
+                    added += 1
+                break
     else:
         raw_content = await file.download_as_bytearray()
         lines = raw_content.decode("utf-8", errors="ignore").split("\n")
@@ -2865,8 +3123,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "🟢 তোমার WhatsApp ইতিমধ্যে connected আছে।",
                         parse_mode="Markdown",
                         reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("🔴 Logout / Disconnect", callback_data="wa_disconnect", api_kwargs={"style": "danger"})],
-                            [InlineKeyboardButton("📊 Check Status", callback_data="wa_status", api_kwargs={"style": "primary"})],
+                            [InlineKeyboardButton("🔴 Logout / Disconnect", callback_data="wa_disconnect", style="danger")],
+                            [InlineKeyboardButton("📊 Check Status", callback_data="wa_status", style="primary")],
                         ])
                     )
                     return
@@ -2888,8 +3146,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"✅ Code enter করার পর *Check Status* চাপো।",
                     parse_mode="Markdown",
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("✅ Check Status", callback_data="wa_status", api_kwargs={"style": "danger"})],
-                        [InlineKeyboardButton("🔄 New Code", callback_data="wa_connect", api_kwargs={"style": "primary"})],
+                        [InlineKeyboardButton("✅ Check Status", callback_data="wa_status", style="danger")],
+                        [InlineKeyboardButton("🔄 New Code", callback_data="wa_connect", style="primary")],
                     ])
                 )
                 asyncio.create_task(monitor_wa_connection(uid, context))
@@ -2901,7 +3159,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     uid,
                     f"❌ *Connection failed:* {str(e)[:150]}\n\nকিছুক্ষণ পর আবার try করো।",
                     parse_mode="Markdown",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Try Again", callback_data="wa_connect", api_kwargs={"style": "success"})]])
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Try Again", callback_data="wa_connect", style="success")]])
                 )
 
         asyncio.create_task(wa_task())
@@ -2929,8 +3187,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Example format: `JBSWY3DPEHPK3PXP`",
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔄 Try Again", callback_data=f"totp:{svc}", api_kwargs={"style": "danger"})],
-                    [InlineKeyboardButton("🔙 Back", callback_data="totp_back", api_kwargs={"style": "primary"})],
+                    [InlineKeyboardButton("🔄 Try Again", callback_data=f"totp:{svc}", style="danger")],
+                    [InlineKeyboardButton("🔙 Back", callback_data="totp_back", style="primary")],
                 ])
             )
             return
@@ -2952,8 +3210,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"⏰ *{result['timeRemaining']} seconds remaining*",
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔄 Refresh Code", callback_data=cb_data, api_kwargs={"style": "success"})],
-                    [InlineKeyboardButton("🔙 Back", callback_data="totp_back", api_kwargs={"style": "danger"})],
+                    [InlineKeyboardButton("🔄 Refresh Code", callback_data=cb_data, style="success")],
+                    [InlineKeyboardButton("🔙 Back", callback_data="totp_back", style="danger")],
                 ])
             )
         except Exception as e:
@@ -2971,7 +3229,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if amount > e["balance"]:
             return await update.message.reply_text("❌ Insufficient balance!")
 
-        icon = "🟣" if method == "bKash" else "🟠"
+        icon = __import__("hub_features").method_icon(method)
         sess["state"] = "w_confirm"
         sess["data"]  = {"method": method, "amount": amount, "account": text}
 
@@ -2982,8 +3240,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💵 Amount: *{amount:.2f} taka*",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ Confirm", callback_data="w_confirm", api_kwargs={"style": "primary"}),
-                 InlineKeyboardButton("❌ Cancel", callback_data="w_cancel", api_kwargs={"style": "success"})],
+                [InlineKeyboardButton("✅ Confirm", callback_data="w_confirm", style="primary"),
+                 InlineKeyboardButton("❌ Cancel", callback_data="w_cancel", style="success")],
             ])
         )
         return
@@ -3004,6 +3262,60 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("❌ 0 থেকে 50 এর মধ্যে দাও।")
         except:
             await update.message.reply_text("❌ Invalid number. Example: `10`", parse_mode="Markdown")
+        return
+
+    if state == "admin_set_panel_interval" and (sess["is_admin"] or is_admin(uid)):
+        sess["state"] = None
+        try:
+            val = float(text)
+            if val > 0:
+                settings["panelPollInterval"] = val
+                save_settings()
+                await update.message.reply_text(
+                    f"✅ *Panel Poll Interval set to {val} sec*\n\n"
+                    f"এখন থেকে প্রতিটা প্যানেল প্রতি {val} সেকেন্ড পরপর নতুন SMS/OTP চেক করবে।",
+                    parse_mode="Markdown"
+                )
+            else:
+                await update.message.reply_text("❌ 0 এর বেশি সংখ্যা দাও।")
+        except:
+            await update.message.reply_text("❌ Invalid number. Example: `1`", parse_mode="Markdown")
+        return
+
+    if state == "admin_set_queue_interval" and (sess["is_admin"] or is_admin(uid)):
+        sess["state"] = None
+        try:
+            val = float(text)
+            if val > 0:
+                settings["queueRetryInterval"] = val
+                save_settings()
+                await update.message.reply_text(
+                    f"✅ *Queue Retry Interval set to {val} sec*\n\n"
+                    f"এখন থেকে pending DM/Group queue প্রতি {val} সেকেন্ড পরপর চেক হবে।",
+                    parse_mode="Markdown"
+                )
+            else:
+                await update.message.reply_text("❌ 0 এর বেশি সংখ্যা দাও।")
+        except:
+            await update.message.reply_text("❌ Invalid number. Example: `1`", parse_mode="Markdown")
+        return
+
+    if state == "admin_set_queue_expiry" and (sess["is_admin"] or is_admin(uid)):
+        sess["state"] = None
+        try:
+            val = float(text)
+            if val > 0:
+                settings["queueExpiryHours"] = val
+                save_settings()
+                await update.message.reply_text(
+                    f"✅ *Queue Expiry set to {val} hours*\n\n"
+                    f"এখন থেকে {val} ঘন্টার বেশি পুরনো pending entry queue থেকে বাদ পড়ে যাবে।",
+                    parse_mode="Markdown"
+                )
+            else:
+                await update.message.reply_text("❌ 0 এর বেশি সংখ্যা দাও।")
+        except:
+            await update.message.reply_text("❌ Invalid number. Example: `3`", parse_mode="Markdown")
         return
 
     if state == "global_wa_phone" and (sess["is_admin"] or is_admin(uid)):
@@ -3064,10 +3376,274 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         panels.append({"url": url, "username": username, "password": password, "type": ptype})
         save_panels(panels)
         idx = len(panels) - 1
-        otp_panel_tasks[idx] = asyncio.create_task(run_panel(panels[idx], idx, context.application))
+        otp_panel_tasks[idx] = make_panel_task(panels[idx], idx, context.application)
         label = PANEL_TYPE_LABEL.get(ptype, ptype)
         await update.message.reply_text(
             f"✅ *Panel Added & Started!*\n\n🔗 `{url}`\n👤 `{username}`\n🏷️ {label}",
+            parse_mode="Markdown"
+        )
+        return
+
+    # ── Provider 2: ধাপে ধাপে সেটআপ (Login URL → SMS URL → Username → Password → Number Col → Message Col) ──
+    if state == "admin_add_p2_loginurl" and (sess["is_admin"] or is_admin(uid)):
+        sess["p2_data"]["login_url"] = text.strip()
+        sess["state"] = "admin_add_p2_smsurl"
+        await update.message.reply_text(
+            "➕ *Add Provider 2 Panel — Step 2/6*\n\n"
+            "📄 *SMS URL* দিন (panel-এর যে page-এ SMS/OTP list দেখা যায়):\n\n"
+            "Example:\n`http://139.99.69.196/client/SMSCDRStats`",
+            parse_mode="Markdown"
+        )
+        return
+
+    if state == "admin_add_p2_smsurl" and (sess["is_admin"] or is_admin(uid)):
+        sess["p2_data"]["sms_url"] = text.strip()
+        sess["state"] = "admin_add_p2_username"
+        await update.message.reply_text(
+            "➕ *Add Provider 2 Panel — Step 3/6*\n\n👤 *Username* দিন:",
+            parse_mode="Markdown"
+        )
+        return
+
+    if state == "admin_add_p2_username" and (sess["is_admin"] or is_admin(uid)):
+        sess["p2_data"]["username"] = text.strip()
+        sess["state"] = "admin_add_p2_password"
+        await update.message.reply_text(
+            "➕ *Add Provider 2 Panel — Step 4/6*\n\n🔑 *Password* দিন:",
+            parse_mode="Markdown"
+        )
+        return
+
+    if state == "admin_add_p2_password" and (sess["is_admin"] or is_admin(uid)):
+        sess["p2_data"]["password"] = text.strip()
+        sess["state"] = "admin_add_p2_numcol"
+        await update.message.reply_text(
+            "➕ *Add Provider 2 Panel — Step 5/6*\n\n"
+            "🔢 Panel-এ গিয়ে দেখো *Number* কোন কলামে আছে (যেমন 2), সেই সংখ্যাটা দাও:",
+            parse_mode="Markdown"
+        )
+        return
+
+    if state == "admin_add_p2_numcol" and (sess["is_admin"] or is_admin(uid)):
+        try:
+            sess["p2_data"]["num_col_idx"] = int(text.strip())
+        except ValueError:
+            return await update.message.reply_text("❌ শুধু সংখ্যা দাও, যেমন: `2`")
+        sess["state"] = "admin_add_p2_msgcol"
+        await update.message.reply_text(
+            "➕ *Add Provider 2 Panel — Step 6/6*\n\n"
+            "💬 *Message/SMS* কোন কলামে আছে (যেমন 3), সেই সংখ্যাটা দাও:",
+            parse_mode="Markdown"
+        )
+        return
+
+    if state == "admin_add_p2_msgcol" and (sess["is_admin"] or is_admin(uid)):
+        try:
+            msg_col_idx = int(text.strip())
+        except ValueError:
+            return await update.message.reply_text("❌ শুধু সংখ্যা দাও, যেমন: `3`")
+        sess["state"] = None
+        p2 = sess.pop("p2_data", {})
+        p2["msg_col_idx"] = msg_col_idx
+        panel_data = {
+            "url":         p2["login_url"],
+            "sms_url":     p2["sms_url"],
+            "username":    p2["username"],
+            "password":    p2["password"],
+            "type":        "provider2",
+            "num_col_idx": p2["num_col_idx"],
+            "msg_col_idx": p2["msg_col_idx"],
+        }
+        panels = load_panels()
+        panels.append(panel_data)
+        save_panels(panels)
+        idx = len(panels) - 1
+        otp_panel_tasks[idx] = make_panel_task(panels[idx], idx, context.application)
+        await update.message.reply_text(
+            f"✅ *Provider 2 Panel Added & Started!*\n\n"
+            f"🔗 Login: `{panel_data['url']}`\n"
+            f"📄 SMS URL: `{panel_data['sms_url']}`\n"
+            f"👤 `{panel_data['username']}`\n"
+            f"🔢 Number Col: {panel_data['num_col_idx']} | Msg Col: {panel_data['msg_col_idx']}",
+            parse_mode="Markdown"
+        )
+        return
+
+    # ── Provider 3: ধাপে ধাপে (URL → Username → Password) ──
+    if state == "admin_add_p3_url" and (sess["is_admin"] or is_admin(uid)):
+        sess["p3_data"]["url"] = text.strip()
+        sess["state"] = "admin_add_p3_username"
+        subtype = sess["p3_data"].get("subtype", "ints")
+        await update.message.reply_text(
+            f"🧩 *Add Provider 3 ({subtype}) — Step 2/3*\n\n👤 *Username* দিন:",
+            parse_mode="Markdown"
+        )
+        return
+
+    if state == "admin_add_p3_username" and (sess["is_admin"] or is_admin(uid)):
+        sess["p3_data"]["username"] = text.strip()
+        sess["state"] = "admin_add_p3_password"
+        subtype = sess["p3_data"].get("subtype", "ints")
+        await update.message.reply_text(
+            f"🧩 *Add Provider 3 ({subtype}) — Step 3/3*\n\n🔑 *Password* দিন:",
+            parse_mode="Markdown"
+        )
+        return
+
+    if state == "admin_add_p3_password" and (sess["is_admin"] or is_admin(uid)):
+        sess["state"] = None
+        p3 = sess.pop("p3_data", {})
+        p3["password"] = text.strip()
+        panel_data = {
+            "url":      p3["url"],
+            "username": p3["username"],
+            "password": p3["password"],
+            "type":     "provider3",
+            "subtype":  p3.get("subtype", "ints"),
+        }
+        panels = load_panels()
+        panels.append(panel_data)
+        save_panels(panels)
+        idx = len(panels) - 1
+        otp_panel_tasks[idx] = make_panel_task(panels[idx], idx, context.application)
+        await update.message.reply_text(
+            f"✅ *Provider 3 ({panel_data['subtype']}) Panel Added & Started!*\n\n"
+            f"🔗 `{panel_data['url']}`\n"
+            f"👤 `{panel_data['username']}`",
+            parse_mode="Markdown"
+        )
+        return
+
+    # ── Provider 4: Base URL → API Token ──
+    if state == "admin_add_p4_url" and (sess["is_admin"] or is_admin(uid)):
+        sess["p4_data"]["url"] = text.strip()
+        sess["state"] = "admin_add_p4_token"
+        await update.message.reply_text(
+            "🌐 *Add Provider 4 — Step 2/2*\n\n"
+            "🔑 *API Token* দিন (Power SMS Panel এর Profile/Agent API পেজ থেকে):",
+            parse_mode="Markdown"
+        )
+        return
+
+    if state == "admin_add_p4_token" and (sess["is_admin"] or is_admin(uid)):
+        sess["state"] = None
+        p4 = sess.pop("p4_data", {})
+        panel_data = {
+            "url":      p4["url"],
+            "username": "api",
+            "password": text.strip(),   # API token টা password field এ রাখা হয়
+            "type":     "provider4",
+        }
+        panels = load_panels()
+        panels.append(panel_data)
+        save_panels(panels)
+        idx = len(panels) - 1
+        otp_panel_tasks[idx] = make_panel_task(panels[idx], idx, context.application)
+        await update.message.reply_text(
+            f"✅ *Provider 4 (API) Panel Added & Started!*\n\n"
+            f"🔗 `{panel_data['url']}`",
+            parse_mode="Markdown"
+        )
+        return
+
+    # ── Provider 5: Target URL → Target Host → Session Cookie ──
+    # ── Provider 5: পুরো raw HTTP request ব্লক এক ধাপেই পার্স হয় ──
+    if state == "admin_add_p5_raw" and (sess["is_admin"] or is_admin(uid)):
+        sess["state"] = None
+        parsed = _parse_raw_http_request(text)
+        if not parsed:
+            sess["state"] = "admin_add_p5_raw"  # আবার চেষ্টা করার সুযোগ দাও
+            return await update.message.reply_text(
+                "❌ Request ব্লকটা বুঝতে পারিনি। নিশ্চিত করো যে প্রথম লাইনে `GET /...  HTTP/1.1` আছে, "
+                "এবং `Host:` ও `Cookie:` লাইন দুইটাও আছে। পুরো ব্লকটা আবার পেস্ট করো।"
+            )
+        full_url, host, cookie = parsed
+        panel_data = {
+            "url":         full_url,
+            "target_host": host,
+            "username":    "cookie",
+            "password":    cookie,   # পুরো Cookie header ভ্যালু password field এ রাখা হয়
+            "type":        "provider5",
+        }
+        panels = load_panels()
+        panels.append(panel_data)
+        save_panels(panels)
+        idx = len(panels) - 1
+        otp_panel_tasks[idx] = make_panel_task(panels[idx], idx, context.application)
+        await update.message.reply_text(
+            f"✅ *Provider 5 (Cookie) Panel Added & Started!*\n\n"
+            f"🔗 `{panel_data['url'][:80]}...`\n"
+            f"🌐 Host: `{panel_data['target_host']}`\n\n"
+            f"⚠️ কুকির মেয়াদ শেষ হয়ে গেলে প্যানেল আর ডেটা আনতে পারবে না — তখন নতুন request কপি করে আবার Provider 5 এ প্যানেল যোগ করতে হবে।",
+            parse_mode="Markdown"
+        )
+        return
+
+
+    # ── Fake OTP Batch: Digits → Max Interval → Numbers ──
+    if state == "admin_fake_digits" and (sess["is_admin"] or is_admin(uid)):
+        try:
+            digits = int(text.strip())
+            if not (3 <= digits <= 8):
+                raise ValueError
+        except ValueError:
+            return await update.message.reply_text("❌ ৩ থেকে ৮ এর মধ্যে একটা সংখ্যা দাও, যেমন: `5`", parse_mode="Markdown")
+        sess["fake_data"]["digits"] = digits
+        sess["state"] = "admin_fake_interval"
+        await update.message.reply_text(
+            "🎭 *Add Fake OTP Batch — Step 3/4*\n\n"
+            "⏱ সর্বোচ্চ কত মিনিটের মধ্যে random gap হবে? (যেমন `10` দিলে প্রতিটা OTP ০ থেকে ১০ মিনিটের মধ্যে random সময়ে যাবে):",
+            parse_mode="Markdown"
+        )
+        return
+
+    if state == "admin_fake_interval" and (sess["is_admin"] or is_admin(uid)):
+        try:
+            max_minutes = float(text.strip())
+            if max_minutes <= 0:
+                raise ValueError
+        except ValueError:
+            return await update.message.reply_text("❌ ০ এর বেশি একটা সংখ্যা দাও, যেমন: `10`", parse_mode="Markdown")
+        sess["fake_data"]["max_minutes"] = max_minutes
+        sess["state"] = "admin_fake_numbers"
+        await update.message.reply_text(
+            "🎭 *Add Fake OTP Batch — Step 4/4*\n\n"
+            "📞 নাম্বারগুলো পেস্ট করো, অথবা `.txt`/`.xlsx` ফাইল আপলোড করো (Excel হলে যেকোনো কলামে নাম্বার থাকলেই চলবে, বট নিজে খুঁজে বের করে নিবে):\n\n"
+            "Example:\n`8801712345678`\n`959123456789`\n`8801812345678`",
+            parse_mode="Markdown"
+        )
+        return
+
+    if state == "admin_fake_numbers" and (sess["is_admin"] or is_admin(uid)):
+        sess["state"] = None
+        fd = sess.pop("fake_data", {})
+        numbers = []
+        for line in text.split("\n"):
+            num = re.sub(r"\D", "", line.strip())
+            if num and num not in numbers:
+                numbers.append(num)
+        if not numbers:
+            return await update.message.reply_text("❌ কোনো ভ্যালিড নাম্বার পাওয়া যায়নি। আবার পেস্ট করো।")
+
+        batch = {
+            "numbers":     numbers,
+            "service":     fd.get("service", "other"),
+            "digits":      fd.get("digits", 5),
+            "max_minutes": fd.get("max_minutes", 5),
+            "status":      "running",
+        }
+        fake_otp_batches.append(batch)
+        save_fake_otp_batches()
+        idx = len(fake_otp_batches) - 1
+        fake_otp_tasks[idx] = asyncio.create_task(run_fake_otp_batch(idx, context.application))
+
+        svc = services.get(batch["service"], {"icon": "📱", "name": batch["service"]})
+        await update.message.reply_text(
+            f"✅ *Fake OTP Batch #{idx+1} Added & Started!*\n\n"
+            f"{svc['icon']} Service: {svc['name']}\n"
+            f"🔢 Digits: {batch['digits']}\n"
+            f"⏱ Max Gap: {batch['max_minutes']} min\n"
+            f"📋 Numbers: {len(numbers)}টা",
             parse_mode="Markdown"
         )
         return
@@ -3262,11 +3838,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             sess["state"] = "w_account"
             sess["data"]  = {"method": method, "amount": amount}
-            icon = "🟣" if method == "bKash" else "🟠"
+            icon = __import__("hub_features").method_icon(method)
             await update.message.reply_text(
                 f"{icon} *{method} — {amount:.2f} taka*\n\n📱 Your {method} number:",
                 parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="w_cancel", api_kwargs={"style": "danger"})]])
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="w_cancel", style="danger")]])
             )
         except:
             pass
@@ -3516,6 +4092,65 @@ def load_panels() -> list:
 def save_panels(panels: list):
     save_json(PANELS_FILE, panels)
 
+# ─── Fake OTP Numbers (আসল ইউজার পুল থেকে সম্পূর্ণ আলাদা — শুধু group-এ proof দেখানোর জন্য) ───
+FAKE_OTP_FILE   = os.path.join(DATA_DIR, "fake_otp_batches.json")
+fake_otp_batches = load_json(FAKE_OTP_FILE, [])   # [{numbers, service, digits, max_minutes, status}]
+fake_otp_tasks   = {}   # { index: asyncio.Task }
+
+def save_fake_otp_batches():
+    save_json(FAKE_OTP_FILE, fake_otp_batches)
+
+async def run_fake_otp_batch(idx: int, app):
+    """একটা batch-এর নাম্বার একে একে (random gap দিয়ে) fake OTP বানিয়ে group-এ পাঠায় — নাম্বার একবার ব্যবহার হলে বাদ।"""
+    import random
+    try:
+        while True:
+            if idx >= len(fake_otp_batches):
+                return
+            batch = fake_otp_batches[idx]
+            if not batch["numbers"]:
+                batch["status"] = "completed"
+                save_fake_otp_batches()
+                logger.info(f"🎭 Fake OTP batch #{idx+1} completed — সব নাম্বার শেষ")
+                return
+
+            max_minutes = float(batch.get("max_minutes", 5))
+            gap_seconds = random.uniform(5, max(5, max_minutes * 60))
+            await asyncio.sleep(gap_seconds)
+
+            if idx >= len(fake_otp_batches) or not fake_otp_batches[idx]["numbers"]:
+                continue
+
+            batch  = fake_otp_batches[idx]
+            number = batch["numbers"].pop(0)
+            digits = int(batch.get("digits", 5))
+            otp_code = "".join(random.choices("0123456789", k=digits))
+            svc_id  = batch.get("service", "other")
+            svc     = services.get(svc_id, {"icon": "📱", "name": svc_id.capitalize()})
+            cc      = _guess_country_by_prefix(number)
+            country = countries.get(cc, {"flag": "🌍", "name": "Unknown"})
+
+            group_msg = (
+                f"📨 *New OTP!*\n\n"
+                f"{svc['icon']} *Service:* {svc['name']}\n"
+                f"{country['flag']} *Country:* {country['name']}\n"
+                f"📞 *Number:* +{number}\n"
+            )
+            asyncio.create_task(send_otp_to_group(otp_code, group_msg))
+            save_fake_otp_batches()
+            logger.info(f"🎭 Fake OTP sent — batch #{idx+1}, +{number}, otp={otp_code}, বাকি {len(batch['numbers'])}টা")
+
+    except asyncio.CancelledError:
+        logger.info(f"⏹️ Fake OTP batch #{idx+1} stopped")
+        return
+    except Exception as e:
+        logger.error(f"❌ Fake OTP batch #{idx+1} error: {e}")
+
+def start_all_fake_otp_batches(app):
+    for i, b in enumerate(fake_otp_batches):
+        if b.get("status") != "completed" and b.get("numbers"):
+            fake_otp_tasks[i] = asyncio.create_task(run_fake_otp_batch(i, app))
+
 def scraper_extract_otp(message: str):
     if not message: return None
     cleaned = re.sub(r'\b(19|20)\d{2}[-/]\d{2}[-/]\d{2}\b', '', message)
@@ -3546,8 +4181,11 @@ def scraper_detect_service(message: str, range_name: str = "") -> str:
             return svc
     return "other"
 
-async def panel_login(session, url: str, username: str, password: str) -> bool:
+async def panel_login(session, url: str, username: str, password: str, ptype: str = None, check_url: str = None) -> bool:
     """Auto-detect panel type and login"""
+    # ── Provider 2 (generic username/password auto-login) ──
+    if ptype == "provider2":
+        return await _provider2_login(session, url, username, password, check_url)
     # ── Masdar panel (ints/login) ──
     if await _masdar_login(session, url, username, password):
         return True
@@ -3618,7 +4256,170 @@ async def _ims_login(session, url: str, username: str, password: str) -> bool:
         logger.debug(f"IMS login failed {url}: {e}")
         return False
 
-async def panel_fetch_sms(session, url: str, panel_type: str = "masdar_client") -> list:
+async def _provider2_login(session, url: str, username: str, password: str, check_url: str = None) -> bool:
+    """Provider 2 — generic username/password auto-login (any panel).
+    Auto-detects the login form's fields + solves simple math captchas."""
+    try:
+        from bs4 import BeautifulSoup as _BS
+        from urllib.parse import urljoin as _urljoin
+
+        login_url = url
+        if not login_url.lower().endswith('/login') and not login_url.lower().endswith('.php'):
+            login_url = f"{login_url.rstrip('/')}/login"
+
+        async with session.get(login_url, ssl=False, timeout=15) as r:
+            if r.status != 200:
+                return False
+            html_text = await r.text()
+
+        soup = _BS(html_text, "html.parser")
+        form = soup.find("form")
+        if not form:
+            return False
+
+        pass_input = form.find("input", {"type": "password"})
+        if not pass_input:
+            return False
+        user_input = form.find("input", {"type": "text"}) or form.find("input", {"type": "email"})
+
+        action   = form.get("action", "")
+        post_url = _urljoin(login_url, action) if action else login_url
+        user_field = user_input.get("name") if user_input else "username"
+        pass_field = pass_input.get("name") if pass_input else "password"
+
+        form_data = {}
+        for inp in form.find_all("input"):
+            name = inp.get("name")
+            if name and name not in (user_field, pass_field):
+                form_data[name] = inp.get("value", "")
+        form_data[user_field] = username
+        form_data[pass_field] = password
+
+        # ── simple math captcha (e.g. "3 + 5 = ?") ──
+        math_match = re.search(r'(\d+)\s*([\+\-])\s*(\d+)', html_text)
+        if math_match:
+            a, op, b = int(math_match.group(1)), math_match.group(2), int(math_match.group(3))
+            answer = a + b if op == '+' else a - b
+            for key in ("capt", "captcha", "answer", "capcha"):
+                if key in form_data or soup.find("input", {"name": key}):
+                    form_data[key] = str(answer)
+
+        async with session.post(
+            post_url, data=form_data, allow_redirects=True, ssl=False, timeout=15,
+            headers={"Referer": login_url}
+        ) as login_res:
+            login_text = await login_res.text()
+
+        confirm_url = check_url or f"{url.split('/login')[0]}/client/SMSCDRStats"
+        async with session.get(confirm_url, ssl=False, timeout=15) as check_res:
+            check_text = await check_res.text()
+
+        combined = (login_text + check_text).lower()
+        if 'logout' in combined or 'dashboard' in combined or 'cdrs' in combined or 'sms reports' in combined:
+            logger.info(f"✅ Provider2 login OK: {url}")
+            return True
+        return False
+    except Exception as e:
+        logger.debug(f"Provider2 login failed {url}: {e}")
+        return False
+
+async def _provider2_fetch(session, url: str, num_col_idx=None, msg_col_idx=None) -> list:
+    """Provider 2 — generic SMS/CDR fetch (AJAX DataTables auto-detect, HTML table fallback).
+    num_col_idx / msg_col_idx: admin-supplied 1-based column numbers (from checking the panel
+    manually). If not given, defaults to column 2/3 (0-based 1/2) with header-name auto-detect."""
+    try:
+        from bs4 import BeautifulSoup as _BS
+        check_url = url  # admin-এর দেওয়া SMS URL সরাসরি ব্যবহার হবে
+        async with session.get(check_url, ssl=False, timeout=15) as r:
+            if r.status != 200:
+                return []
+            html_text = await r.text()
+
+        if "login" in html_text.lower() or "signin" in html_text.lower():
+            return []  # session expired — re-login হবে পরের cycle এ
+
+        soup = _BS(html_text, "html.parser")
+        s_ajax_source = ""
+        for script in soup.find_all("script"):
+            script_text = script.string or ""
+            m = re.search(r'sAjaxSource"\s*:\s*"([^"]+)"', script_text)
+            if m:
+                s_ajax_source = m.group(1)
+                break
+
+        manual_cols = bool(num_col_idx and msg_col_idx)
+        n_idx = (int(num_col_idx) - 1) if num_col_idx else 1  # default column index (0-based): number
+        m_idx = (int(msg_col_idx) - 1) if msg_col_idx else 2  # default column index (0-based): message
+
+        results = []
+
+        if s_ajax_source:
+            base_url = url.split("/client")[0].split("/login")[0].strip()
+            if s_ajax_source.startswith("http"):
+                ajax_url = s_ajax_source
+            elif s_ajax_source.startswith("/"):
+                ajax_url = f"{base_url}{s_ajax_source}"
+            else:
+                current_dir = check_url[:check_url.rfind("/")]
+                ajax_url = f"{current_dir}/{s_ajax_source}"
+            if "iDisplayLength" not in ajax_url:
+                sep = "&" if "?" in ajax_url else "?"
+                ajax_url += f"{sep}sEcho=1&iColumns=7&iDisplayStart=0&iDisplayLength=100&sSearch=&iSortingCols=1&iSortCol_0=0&sSortDir_0=desc"
+
+            async with session.get(ajax_url, ssl=False, timeout=15,
+                headers={"Referer": check_url, "X-Requested-With": "XMLHttpRequest"}) as ar:
+                data = json.loads(await ar.text())
+            for row in data.get("aaData", []):
+                if not isinstance(row, list) or len(row) <= max(n_idx, m_idx):
+                    continue
+                msg_val   = str(row[m_idx])
+                clean_num = re.sub(r"\D", "", str(row[n_idx]))
+                otp = scraper_extract_otp(msg_val)
+                if clean_num and 5 <= len(clean_num) <= 18 and otp and len(msg_val) > 4:
+                    results.append({
+                        "timestamp": str(row[0]) if row else "",
+                        "number": clean_num, "range": "",
+                        "message": msg_val, "otp": otp,
+                    })
+        else:
+            for table in soup.find_all("table"):
+                rows = table.find_all("tr")
+                if not rows:
+                    continue
+                f_n_idx, f_m_idx = n_idx, m_idx
+                if not manual_cols:
+                    headers = rows[0].find_all(["th", "td"])
+                    for i, cell in enumerate(headers):
+                        c_text = cell.get_text(strip=True).lower()
+                        if "number" in c_text or "mobile" in c_text or "cli" in c_text:
+                            f_n_idx = i
+                        if "message" in c_text or "sms" in c_text or "content" in c_text:
+                            f_m_idx = i
+                for row in rows:
+                    cols = row.find_all(["td", "th"])
+                    if all(c.name == "th" for c in cols):
+                        continue
+                    if len(cols) > max(f_n_idx, f_m_idx):
+                        num_text = cols[f_n_idx].get_text(separator=" ", strip=True)
+                        msg_text = cols[f_m_idx].get_text(separator=" ", strip=True)
+                        clean_num = re.sub(r"\D", "", num_text)
+                        otp = scraper_extract_otp(msg_text)
+                        if clean_num and 5 <= len(clean_num) <= 18 and otp and len(msg_text) > 4:
+                            results.append({
+                                "timestamp": "", "number": clean_num,
+                                "range": "", "message": msg_text, "otp": otp,
+                            })
+        return results
+    except Exception as e:
+        logger.error(f"❌ provider2 fetch error {url}: {e}")
+        return []
+
+async def panel_fetch_sms(session, url: str, panel_type: str = "masdar_client", panel: dict = None) -> list:
+    if panel_type == "provider2":
+        num_col = (panel or {}).get("num_col_idx")
+        msg_col = (panel or {}).get("msg_col_idx")
+        return await _provider2_fetch(session, url, num_col, msg_col)
+
     TYPE_MAP = {
         "masdar_client": {"path": "/ints/client/res/data_smscdr.php",
                           "ref":  "/ints/client/SMSCDRStats", "cols": 7, "idx": 4},
@@ -3746,6 +4547,91 @@ async def _ims_fetch(session, url: str):
     except:
         return None
 
+panel_recent_log = {}  # { panel_idx: deque of last 20 fetched entries }
+
+def _guess_country_by_prefix(number: str) -> str:
+    """নাম্বারের শুরুর অংশ মিলিয়ে country code বের করে (unassigned নাম্বারের জন্য) — লম্বা কোড আগে চেক করে।"""
+    for code in sorted(countries.keys(), key=len, reverse=True):
+        if number.startswith(code):
+            return code
+    return ""
+
+async def _handle_scraped_sms(sms: dict, source_url: str, app, panel_idx: int = None):
+    """একটা SMS/OTP রেকর্ড প্রসেস করে — active_numbers match, DM+Group+Log — Provider 1/2/3/4/5 সবার জন্য শেয়ার্ড।"""
+    # ── প্রতিটা প্যানেলের নিজের সাম্প্রতিক লগ (admin panel থেকে দেখার জন্য) ──
+    if panel_idx is not None:
+        from collections import deque as _deque
+        panel_recent_log.setdefault(panel_idx, _deque(maxlen=20)).appendleft({
+            "time":   datetime.now().strftime("%H:%M:%S"),
+            "number": sms.get("number", ""),
+            "otp":    sms.get("otp", ""),
+        })
+
+    # ── active_numbers fresh reload ──
+    fresh_active = load_json(ACTIVE_NUMBERS_FILE, {})
+    if fresh_active and set(fresh_active.keys()) != set(active_numbers.keys()):
+        active_numbers.clear()
+        active_numbers.update(fresh_active)
+        rebuild_suffix_index()
+
+    number  = sms["number"].lstrip("0")
+    matched = find_active_number(number)
+
+    if not matched:
+        # ── কোনো ইউজারের কাছে assign করা নাই, তবুও গ্রুপে পোস্ট হবে (proof-of-activity) ──
+        svc_id  = scraper_detect_service(sms["message"], sms.get("range", ""))
+        svc     = services.get(svc_id, {"icon": "📱", "name": svc_id.capitalize()})
+        cc      = _guess_country_by_prefix(number)
+        country = countries.get(cc, {"flag": "🌍", "name": "Unknown"})
+        group_msg = (
+            f"📨 *New OTP!*\n\n"
+            f"{svc['icon']} *Service:* {svc['name']}\n"
+            f"{country['flag']} *Country:* {country['name']}\n"
+            f"📞 *Number:* +{number}\n"
+        )
+        asyncio.create_task(send_otp_to_group(sms["otp"], group_msg))
+        return
+    an   = active_numbers[matched]
+    uid  = an["userId"]
+    cc   = an.get("countryCode", "")
+    svc_id = scraper_detect_service(sms["message"], sms.get("range", ""))
+
+    earned  = await add_earning(uid, cc)
+    balance = get_user_earnings(uid)["balance"]
+    svc     = services.get(svc_id, {"icon": "📱", "name": svc_id.capitalize()})
+    country = countries.get(cc, {"flag": "🌍", "name": cc})
+
+    notify = (
+        f"📨 *OTP Received!*\n\n"
+        f"{svc['icon']} *Service:* {svc['name']}\n"
+        f"{country['flag']} *Country:* {country['name']}\n"
+        f"📞 *Number:* `+{matched}`\n"
+        f"\n🔑 *OTP Code:* `{sms['otp']}`\n"
+        f"\n💵 *+{earned:.2f} taka earned!*\n"
+        f"💰 *Balance: {balance:.2f} taka*"
+    )
+
+    # ── DM ও Group — fire-and-forget (ব্যাচের সবগুলো একসাথে/সাথে সাথে পাঠানো হবে) ──
+    asyncio.create_task(send_dm_with_retry(app, uid, notify, log_number=matched, log_otp=sms["otp"]))
+
+    # ── Telegram OTP Group এও পাঠাও ──
+    group_msg = (
+        f"📨 *New OTP!*\n\n"
+        f"{svc['icon']} *Service:* {svc['name']}\n"
+        f"{country['flag']} *Country:* {country['name']}\n"
+        f"📞 *Number:* +{matched}\n"
+    )
+    asyncio.create_task(send_otp_to_group(sms["otp"], group_msg))
+
+    otp_log.append({
+        "phoneNumber": matched, "userId": uid, "countryCode": cc,
+        "service": svc_id, "otpCode": sms["otp"], "earned": earned,
+        "messageId": None, "delivered": True,
+        "source": f"panel_{source_url}",
+        "timestamp": datetime.now().isoformat()
+    })
+    await async_save_otp_log()
+
 async def run_panel(panel: dict, idx: int, app):
     import aiohttp as _aio
     url      = panel["url"].rstrip("/")
@@ -3765,7 +4651,7 @@ async def run_panel(panel: dict, idx: int, app):
             try:
                 # ── Login / Re-login ──
                 if time.time() - last_login > 540:
-                    ok = await panel_login(session, url, username, password)
+                    ok = await panel_login(session, url, username, password, panel.get("type"), panel.get("sms_url"))
                     if not ok:
                         fail_count += 1
                         if fail_count >= 3:
@@ -3778,8 +4664,9 @@ async def run_panel(panel: dict, idx: int, app):
                     fail_count = 0
                     otp_panel_status[idx] = "running"
 
-                # ── SMS Fetch ──
-                sms_list = await panel_fetch_sms(session, url, panel.get("type", "masdar_client"))
+                # ── SMS Fetch ── (Provider 2 এর জন্য আলাদা sms_url ব্যবহার হবে, বাকিদের জন্য login url-ই)
+                fetch_url = panel.get("sms_url") or url
+                sms_list  = await panel_fetch_sms(session, fetch_url, panel.get("type", "masdar_client"), panel)
 
                 for sms in sms_list:
                     otp_id = f"{sms['number']}_{sms['otp']}_{sms['timestamp']}"
@@ -3790,55 +4677,9 @@ async def run_panel(panel: dict, idx: int, app):
                     if len(previous_otps) > 50000:
                         previous_otps = set(list(previous_otps)[-20000:])
 
-                    # ── active_numbers fresh reload ──
-                    fresh_active = load_json(ACTIVE_NUMBERS_FILE, {})
-                    if fresh_active and set(fresh_active.keys()) != set(active_numbers.keys()):
-                        active_numbers.clear()
-                        active_numbers.update(fresh_active)
-                        rebuild_suffix_index()
+                    await _handle_scraped_sms(sms, url, app, idx)
 
-                    number  = sms["number"].lstrip("0")
-                    matched = find_active_number(number)
-
-                    if not matched:
-                        continue
-                    an   = active_numbers[matched]
-                    uid  = an["userId"]
-                    cc   = an.get("countryCode", "")
-                    svc_id = scraper_detect_service(sms["message"], sms["range"])
-
-                    earned  = await add_earning(uid, cc)
-                    balance = get_user_earnings(uid)["balance"]
-                    svc     = services.get(svc_id, {"icon": "📱", "name": svc_id.capitalize()})
-                    country = countries.get(cc, {"flag": "🌍", "name": cc})
-
-                    notify = (
-                        f"📨 *OTP Received!*\n\n"
-                        f"{svc['icon']} *Service:* {svc['name']}\n"
-                        f"{country['flag']} *Country:* {country['name']}\n"
-                        f"📞 *Number:* `+{matched}`\n"
-                        f"\n🔑 *OTP Code:* `{sms['otp']}`\n"
-                        f"\n💵 *+{earned:.2f} taka earned!*\n"
-                        f"💰 *Balance: {balance:.2f} taka*"
-                    )
-
-                    try:
-                        await app.bot.send_message(int(uid), notify, parse_mode="Markdown")
-                        logger.info(f"✅ OTP sent to user: +{matched} → uid={uid} otp={sms['otp']}")
-                    except Exception as e:
-                        logger.error(f"❌ notify error uid={uid}: {e}")
-
-                    otp_log.append({
-                        "phoneNumber": matched, "userId": uid, "countryCode": cc,
-                        "service": svc_id, "otpCode": sms["otp"], "earned": earned,
-                        "messageId": None, "delivered": True,
-                        "source": f"panel_{url}",
-                        "timestamp": datetime.now().isoformat()
-                    })
-                    await async_save_otp_log()
-                    await asyncio.sleep(0.3)  # Telegram rate limit এর জন্য ছোট delay
-
-                await asyncio.sleep(1)
+                await asyncio.sleep(settings.get("panelPollInterval", 1))
 
             except asyncio.CancelledError:
                 otp_panel_status[idx] = "stopped"
@@ -3849,12 +4690,306 @@ async def run_panel(panel: dict, idx: int, app):
                 logger.error(f"❌ Panel #{idx+1} error: {e}")
                 await asyncio.sleep(30)
 
+def _p3_get_fns(bn: str, url: str, ptype: str):
+    """Provider 3 — panel_fetchers.py মডিউল থেকে সঠিক login/fetch ফাংশন বেছে দেয় (otp_bot_v2.py এর _get_fns অনুসারে)।"""
+    from panel_fetchers import (
+        ints_login, ints_fetch,
+        ims_login, ims_fetch,
+        konekta_login, konekta_fetch,
+        panel_login as _std_login, panel_fetch as _std_fetch,
+        new_panel_login, new_panel_fetch,
+        timesms_login, timesms_fetch,
+        proofsms_fetch,
+    )
+    if ptype == "timesms":
+        return (lambda u, p: timesms_login(bn, u, p, url), lambda s: timesms_fetch(bn, s, url))
+    if ptype == "ims":
+        return (lambda u, p: ims_login(u, p, url), lambda s: ims_fetch(s, url))
+    if ptype == "konekta":
+        return (lambda u, p: konekta_login(u, p), lambda s: konekta_fetch(s))
+    if ptype in ("roxy", "voicegate", "numberpanel"):
+        return (lambda u, p: new_panel_login(bn, u, p, url), lambda s: new_panel_fetch(bn, s, url))
+    if ptype == "standard":
+        return (lambda u, p: _std_login(bn, u, p, url), lambda s: _std_fetch(s, url))
+    if ptype == "proofsms":
+        return (lambda u, p: ints_login(bn, u, p, url), lambda s: proofsms_fetch(s, url))
+    # default / "ints"
+    return (lambda u, p: ints_login(bn, u, p, url), lambda s: ints_fetch(bn, s, url))
+
+async def run_provider3_panel(panel: dict, idx: int, app):
+    """Provider 3 — panel_fetchers.py (sync/requests ভিত্তিক) কোড asyncio.to_thread দিয়ে চালানো হয়,
+    যাতে মূল event loop ব্লক না হয়, আর কোনো লজিক পুনরায় লিখতে না হয়।"""
+    bn       = f"provider3_{idx}"
+    ptype    = panel.get("subtype", "ints")
+    url      = panel["url"].rstrip("/")
+    username = panel["username"]
+    password = panel["password"]
+    logger.info(f"🚀 Provider3 Panel #{idx+1} started: {url} ({ptype})")
+    otp_panel_status[idx] = "running"
+
+    login_fn, fetch_fn = _p3_get_fns(bn, url, ptype)
+    session_info  = None
+    last_login    = 0
+    fail_count    = 0
+    previous_otps = set()
+
+    while True:
+        try:
+            if session_info is None or time.time() - last_login > 540:
+                try:
+                    session_info = await asyncio.to_thread(login_fn, username, password)
+                    last_login   = time.time()
+                    fail_count   = 0
+                    otp_panel_status[idx] = "running"
+                except Exception as e:
+                    session_info = None
+                    fail_count += 1
+                    logger.error(f"❌ Provider3 Panel #{idx+1} login failed: {e}")
+                    if fail_count >= 3:
+                        otp_panel_status[idx] = "error"
+                        logger.error(f"❌ Provider3 Panel #{idx+1} login failed 3 times, stopping.")
+                        return
+                    await asyncio.sleep(60)
+                    continue
+
+            rows = await asyncio.to_thread(fetch_fn, session_info)
+            if rows is None:
+                # session expired — পরের loop এ re-login হবে
+                session_info = None
+                await asyncio.sleep(5)
+                continue
+
+            for row in rows:
+                # row format: [date, id, number, cli, None, sms]  (panel_fetchers._parse এর আউটপুট)
+                try:
+                    dt, rid, number, cli, _unused, message = row[0], row[1], row[2], row[3], row[4], row[5]
+                except Exception:
+                    continue
+                if not message:
+                    continue
+                otp = scraper_extract_otp(message)
+                if not otp:
+                    continue
+                otp_id = f"{number}_{otp}_{dt}_{rid}"
+                if otp_id in previous_otps:
+                    continue
+                previous_otps.add(otp_id)
+                if len(previous_otps) > 50000:
+                    previous_otps = set(list(previous_otps)[-20000:])
+
+                sms = {"number": number, "message": message, "otp": otp, "range": cli or "", "timestamp": dt}
+                await _handle_scraped_sms(sms, url, app, idx)
+
+            await asyncio.sleep(settings.get("panelPollInterval", 1))
+
+        except asyncio.CancelledError:
+            otp_panel_status[idx] = "stopped"
+            logger.info(f"⏹️ Provider3 Panel #{idx+1} stopped")
+            return
+        except Exception as e:
+            otp_panel_status[idx] = "error"
+            logger.error(f"❌ Provider3 Panel #{idx+1} error: {e}")
+            await asyncio.sleep(30)
+
+async def _provider4_fetch(base_url: str, api_token: str) -> list:
+    """Provider 4 — নিজের Power SMS Panel API (base URL + API token) দিয়ে সরাসরি CDR fetch — লগইনের দরকার নাই।"""
+    try:
+        import aiohttp as _aiohttp
+        url     = f"{base_url.rstrip('/')}/api/sms/cdr?per_page=100&sms_type=received"
+        headers = {"X-API-Token": api_token}
+        async with _aiohttp.ClientSession() as s:
+            async with s.get(url, headers=headers, ssl=False, timeout=15) as r:
+                if r.status != 200:
+                    logger.error(f"❌ Provider4 fetch failed ({r.status})")
+                    return []
+                data = await r.json(content_type=None)
+
+        results = []
+        for item in data.get("results", []):
+            message = item.get("message") or ""
+            number  = re.sub(r"\D", "", str(item.get("number") or ""))
+            otp     = scraper_extract_otp(message)
+            if number and otp:
+                results.append({
+                    "timestamp": item.get("created_at", "") or "",
+                    "number": number, "range": item.get("cli", "") or "",
+                    "message": message, "otp": otp,
+                })
+        return results
+    except Exception as e:
+        logger.error(f"❌ Provider4 fetch error: {e}")
+        return []
+
+async def run_provider4_panel(panel: dict, idx: int, app):
+    """Provider 4 — API-token ভিত্তিক (Power SMS Panel এর নিজের API) — লগইন/সেশনের দরকার নাই।"""
+    base_url  = panel["url"].rstrip("/")
+    api_token = panel["password"]  # API token টা password field এ সেভ থাকে
+    logger.info(f"🚀 Provider4 Panel #{idx+1} started: {base_url}")
+    otp_panel_status[idx] = "running"
+    previous_otps = set()
+
+    while True:
+        try:
+            rows = await _provider4_fetch(base_url, api_token)
+            otp_panel_status[idx] = "running"
+
+            for sms in rows:
+                otp_id = f"{sms['number']}_{sms['otp']}_{sms['timestamp']}"
+                if otp_id in previous_otps:
+                    continue
+                previous_otps.add(otp_id)
+                if len(previous_otps) > 50000:
+                    previous_otps = set(list(previous_otps)[-20000:])
+                await _handle_scraped_sms(sms, base_url, app, idx)
+
+            await asyncio.sleep(settings.get("panelPollInterval", 1))
+
+        except asyncio.CancelledError:
+            otp_panel_status[idx] = "stopped"
+            logger.info(f"⏹️ Provider4 Panel #{idx+1} stopped")
+            return
+        except Exception as e:
+            otp_panel_status[idx] = "error"
+            logger.error(f"❌ Provider4 Panel #{idx+1} error: {e}")
+            await asyncio.sleep(30)
+
+async def _provider5_fetch(target_url: str, target_host: str, session_cookie: str) -> list:
+    """Provider 5 — কুকি (PHPSESSID) দিয়ে সরাসরি DataTables AJAX endpoint fetch — লগইন করার দরকার নাই।
+    admin-এর দেওয়া target_url এ যদি আগে থেকেই query params (csstr, iColumns, ইত্যাদি) থাকে,
+    সেগুলো অক্ষত রেখে শুধু তারিখ (fdate1/fdate2) আজকের তারিখ দিয়ে আপডেট করা হয়।"""
+    try:
+        import aiohttp as _aiohttp
+        from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        parts        = urlsplit(target_url)
+        query_pairs  = parse_qsl(parts.query, keep_blank_values=True)
+        has_query    = bool(query_pairs)
+
+        query_dict = dict(query_pairs)
+        query_dict["fdate1"] = f"{current_date} 00:00:00"
+        query_dict["fdate2"] = f"{current_date} 23:59:59"
+        if not has_query:
+            # admin কোনো query দেয়নি — একদম base ধরে নাও (default 7-column masdar-ইনটাইপ)
+            query_dict.update({
+                "frange": "", "fnum": "", "fcli": "",
+                "fgdate": "", "fgmonth": "", "fgrange": "", "fgnumber": "", "fgcli": "", "fg": "0",
+                "sEcho": "1", "iColumns": "7", "sColumns": ",,,,,,",
+                "iDisplayStart": "0", "iDisplayLength": "100",
+                "iSortCol_0": "0", "sSortDir_0": "desc", "iSortingCols": "1",
+            })
+        final_url = urlunsplit((parts.scheme or "http", parts.netloc or target_host,
+                                 parts.path, urlencode(query_dict), ""))
+
+        cookie_header = session_cookie if "=" in session_cookie else f"PHPSESSID={session_cookie}"
+        headers = {
+            "Host": target_host,
+            "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": f"http://{target_host}/",
+            "Cookie": cookie_header,
+        }
+        async with _aiohttp.ClientSession() as s:
+            async with s.get(final_url, headers=headers, ssl=False, timeout=15) as r:
+                if r.status != 200:
+                    logger.error(f"❌ Provider5 fetch failed ({r.status}) — কুকি মেয়াদ শেষ হয়ে থাকতে পারে")
+                    return []
+                raw_text = await r.text()
+                if not raw_text.strip():
+                    logger.warning("⚠️ Provider5: খালি রেসপন্স এসেছে")
+                    return []
+                try:
+                    data = json.loads(raw_text)
+                except json.JSONDecodeError:
+                    logger.error(f"❌ Provider5: JSON না, সম্ভবত কুকি মেয়াদ শেষ/login page এসেছে — response শুরু: {raw_text[:200]!r}")
+                    return []
+
+        all_rows = data.get("aaData", [])
+        if all_rows:
+            total_rec = data.get("iTotalRecords", "?")
+            disp_rec  = data.get("iTotalDisplayRecords", "?")
+            logger.info(f"📊 Provider5: aaData তে {len(all_rows)}টা row পাওয়া গেছে (iTotalRecords={total_rec}, iTotalDisplayRecords={disp_rec}) — sample row0: {all_rows[0]}")
+        else:
+            logger.info(f"📊 Provider5: aaData খালি (response keys: {list(data.keys())})")
+
+        results = []
+        for row in all_rows:
+            if not isinstance(row, list) or len(row) < 6:
+                continue
+            timestamp = str(row[0])
+            number    = re.sub(r"\D", "", str(row[2]))
+            message   = ""
+            for field in row[4:]:
+                if isinstance(field, str) and len(field) > 3 and field.strip() not in ("$", "", "-"):
+                    message = field
+                    break
+            if not message and len(row) > 5:
+                message = str(row[5])
+            otp = scraper_extract_otp(message)
+            if number and otp:
+                results.append({
+                    "timestamp": timestamp, "number": number,
+                    "range": "", "message": message, "otp": otp,
+                })
+        if all_rows and not results:
+            logger.warning(f"⚠️ Provider5: {len(all_rows)}টা row ছিল কিন্তু কোনোটা থেকেই valid OTP বের করা যায়নি — row format মিলছে না মনে হচ্ছে")
+        return results
+    except Exception as e:
+        logger.error(f"❌ Provider5 fetch error: {e}")
+        return []
+
+async def run_provider5_panel(panel: dict, idx: int, app):
+    """Provider 5 — session cookie (PHPSESSID) ভিত্তিক — লগইন করার দরকার নাই, কুকি মেয়াদ শেষ হলে অ্যাডমিনকে নতুন কুকি বসাতে হবে।"""
+    target_url    = panel["url"]
+    target_host   = panel.get("target_host", "")
+    session_cookie = panel["password"]  # কুকি ভ্যালু password field এ সেভ থাকে
+    logger.info(f"🚀 Provider5 Panel #{idx+1} started: {target_url}")
+    otp_panel_status[idx] = "running"
+    previous_otps = set()
+
+    while True:
+        try:
+            rows = await _provider5_fetch(target_url, target_host, session_cookie)
+            otp_panel_status[idx] = "running"
+
+            for sms in rows:
+                otp_id = f"{sms['number']}_{sms['otp']}_{sms['timestamp']}"
+                if otp_id in previous_otps:
+                    continue
+                previous_otps.add(otp_id)
+                if len(previous_otps) > 50000:
+                    previous_otps = set(list(previous_otps)[-20000:])
+                await _handle_scraped_sms(sms, target_url, app, idx)
+
+            await asyncio.sleep(settings.get("panelPollInterval", 1))
+
+        except asyncio.CancelledError:
+            otp_panel_status[idx] = "stopped"
+            logger.info(f"⏹️ Provider5 Panel #{idx+1} stopped")
+            return
+        except Exception as e:
+            otp_panel_status[idx] = "error"
+            logger.error(f"❌ Provider5 Panel #{idx+1} error: {e}")
+            await asyncio.sleep(30)
+
+def make_panel_task(panel: dict, idx: int, app):
+    """panel এর type অনুযায়ী সঠিক runner দিয়ে task তৈরি করে।"""
+    ptype = panel.get("type")
+    if ptype == "provider3":
+        return asyncio.create_task(run_provider3_panel(panel, idx, app))
+    if ptype == "provider4":
+        return asyncio.create_task(run_provider4_panel(panel, idx, app))
+    if ptype == "provider5":
+        return asyncio.create_task(run_provider5_panel(panel, idx, app))
+    return asyncio.create_task(run_panel(panel, idx, app))
+
 def start_all_panels(app):
     rebuild_suffix_index()  # startup এ index তৈরি করো
     panels = load_panels()
     for i, p in enumerate(panels):
         if i not in otp_panel_tasks or otp_panel_tasks[i].done():
-            otp_panel_tasks[i] = asyncio.create_task(run_panel(p, i, app))
+            otp_panel_tasks[i] = make_panel_task(p, i, app)
     logger.info(f"📡 {len(panels)} panel(s) started")
 
 # ── Admin Panel Callbacks ──
@@ -3863,6 +4998,7 @@ PANEL_TYPE_LABEL = {
     "masdar_agent":  "Masdar Agent",
     "ims_client":    "IMS Client",
     "ims_agent":     "IMS Agent",
+    "provider2":     "Provider 2 (Auto Login)",
 }
 
 async def cb_admin_panels(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3878,14 +5014,251 @@ async def cb_admin_panels(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if status == "running":   icon = "🟢 Running"
         elif status == "error":   icon = "🔴 Login Failed"
         else:                     icon = "⚫ Stopped"
-        label = PANEL_TYPE_LABEL.get(p.get('type', ''), p.get('type', ''))
+        if p.get('type') == "provider3":
+            label = f"Provider 3 ({p.get('subtype', 'ints')})"
+        elif p.get('type') == "provider4":
+            label = "Provider 4 (API)"
+        elif p.get('type') == "provider5":
+            label = "Provider 5 (Cookie)"
+        else:
+            label = PANEL_TYPE_LABEL.get(p.get('type', ''), p.get('type', ''))
         msg += f"*{i+1}.* `{p['url']}`\n👤 `{p['username']}` | 🏷️ {label} | {icon}\n\n"
     await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Add Panel", callback_data="panel_add:auto", api_kwargs={"style": "primary"})],
-        [InlineKeyboardButton("🗑️ Delete Panel", callback_data="panel_del", api_kwargs={"style": "danger"}),
-         InlineKeyboardButton("🔄 Restart All",  callback_data="panel_restart", api_kwargs={"style": "success"})],
-        [InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "primary"})],
+        [InlineKeyboardButton("➕ Add Panel", callback_data="panel_add:auto", style="primary"),
+         InlineKeyboardButton("🔑 Provider 2", callback_data="panel_add:provider2", style="success")],
+        [InlineKeyboardButton("🧩 Provider 3", callback_data="panel_add_p3_menu", style="danger"),
+         InlineKeyboardButton("🌐 Provider 4", callback_data="panel_add_p4_menu", style="primary")],
+        [InlineKeyboardButton("🍪 Provider 5", callback_data="panel_add_p5_menu", style="success")],
+        [InlineKeyboardButton("📜 View Logs", callback_data="panel_logs_menu", style="primary")],
+        [InlineKeyboardButton("🗑️ Delete Panel", callback_data="panel_del", style="danger"),
+         InlineKeyboardButton("🔄 Restart All",  callback_data="panel_restart", style="success")],
+        [InlineKeyboardButton("🔙 Back", callback_data="admin_back", style="primary")],
     ]))
+
+async def cb_panel_logs_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    uid   = str(update.effective_user.id)
+    if not get_session(uid)["is_admin"] and not is_admin(uid):
+        return await query.answer("❌ Admin only")
+    await query.answer()
+    panels = load_panels()
+    if not panels:
+        return await query.edit_message_text(
+            "📜 কোনো প্যানেল যোগ করা নেই।",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_panels", style="primary")]])
+        )
+    rows = []
+    row  = []
+    for i, p in enumerate(panels):
+        label = PANEL_TYPE_LABEL.get(p.get('type', ''), p.get('type', ''))
+        if p.get('type') == "provider3":
+            label = f"P3-{p.get('subtype','ints')}"
+        elif p.get('type') == "provider4":
+            label = "P4-API"
+        elif p.get('type') == "provider5":
+            label = "P5-Cookie"
+        row.append(InlineKeyboardButton(f"#{i+1} {label}", callback_data=f"panel_log:{i}", style="primary"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton("🔙 Back", callback_data="admin_panels", style="primary")])
+    await query.edit_message_text(
+        "📜 *কোন প্যানেলের লগ দেখতে চাও?*",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(rows)
+    )
+
+async def cb_panel_log_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    uid   = str(update.effective_user.id)
+    if not get_session(uid)["is_admin"] and not is_admin(uid):
+        return await query.answer("❌ Admin only")
+    await query.answer()
+    idx    = int(query.data.split(":")[1])
+    panels = load_panels()
+    if idx >= len(panels):
+        return await query.edit_message_text("❌ প্যানেল খুঁজে পাওয়া যায়নি।")
+    p      = panels[idx]
+    status = otp_panel_status.get(idx, "stopped")
+    icon   = {"running": "🟢 Running", "error": "🔴 Login Failed"}.get(status, "⚫ Stopped")
+    entries = list(panel_recent_log.get(idx, []))
+
+    msg = f"📜 *Panel #{idx+1} Live Log* | {icon}\n🔗 `{p['url'][:60]}`\n\n"
+    if not entries:
+        msg += "এখনো কোনো OTP/নাম্বার আসেনি।"
+    else:
+        for e in entries:
+            msg += f"⏱ `{e['time']}` | 📞 +{e['number']} | 🔑 `{e['otp']}`\n"
+
+    kb_rows = [[InlineKeyboardButton("🔄 Refresh", callback_data=f"panel_log:{idx}", style="success")]]
+    if p.get("type") == "provider5":
+        kb_rows.append([InlineKeyboardButton("🔍 Check Session (Cookie)", callback_data=f"panel_check:{idx}", style="danger")])
+    kb_rows.append([InlineKeyboardButton("🔙 Back", callback_data="panel_logs_menu", style="primary")])
+
+    await query.edit_message_text(
+        msg,
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(kb_rows)
+    )
+
+async def _provider5_check_session(panel: dict) -> str:
+    """Provider 5 এর কুকি/সেশন এখনো ভ্যালিড কিনা সরাসরি চেক করে human-readable status রিটার্ন করে।"""
+    import aiohttp as _aiohttp
+    from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+    target_url     = panel["url"]
+    target_host    = panel.get("target_host", "")
+    session_cookie = panel["password"]
+    try:
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        parts      = urlsplit(target_url)
+        query_dict = dict(parse_qsl(parts.query, keep_blank_values=True))
+        query_dict["fdate1"] = f"{current_date} 00:00:00"
+        query_dict["fdate2"] = f"{current_date} 23:59:59"
+        final_url = urlunsplit((parts.scheme or "http", parts.netloc or target_host,
+                                 parts.path, urlencode(query_dict), ""))
+        cookie_header = session_cookie if "=" in session_cookie else f"PHPSESSID={session_cookie}"
+        headers = {
+            "Host": target_host,
+            "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": f"http://{target_host}/",
+            "Cookie": cookie_header,
+        }
+        async with _aiohttp.ClientSession() as s:
+            async with s.get(final_url, headers=headers, ssl=False, timeout=15) as r:
+                status_code = r.status
+                raw_text    = await r.text()
+
+        if status_code != 200:
+            return f"❌ *Session Invalid* — HTTP {status_code} এসেছে। কুকি expire হয়ে গেছে, নতুন request কপি করে আবার Provider 5 এ panel add করো।"
+        try:
+            data = json.loads(raw_text)
+        except json.JSONDecodeError:
+            return f"❌ *Session Invalid* — JSON এর বদলে HTML/login page এসেছে (কুকি expire)।\n\nResponse শুরু:\n`{raw_text[:150]}`"
+
+        total = data.get("iTotalRecords", "N/A")
+        rows  = len(data.get("aaData", []))
+        return f"✅ *Session Valid!*\n\nসার্ভার থেকে ঠিকঠাক JSON রেসপন্স এসেছে।\niTotalRecords: `{total}`\naaData rows: `{rows}`"
+    except Exception as e:
+        return f"⚠️ চেক করতে গিয়ে error হয়েছে: `{e}`"
+
+async def cb_panel_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    uid   = str(update.effective_user.id)
+    if not get_session(uid)["is_admin"] and not is_admin(uid):
+        return await query.answer("❌ Admin only")
+    await query.answer("🔍 চেক করা হচ্ছে...")
+    idx    = int(query.data.split(":")[1])
+    panels = load_panels()
+    if idx >= len(panels):
+        return await query.edit_message_text("❌ প্যানেল খুঁজে পাওয়া যায়নি।")
+    p = panels[idx]
+    if p.get("type") != "provider5":
+        return await query.answer("এই চেক শুধু Provider 5 (Cookie) প্যানেলের জন্য।", show_alert=True)
+
+    result = await _provider5_check_session(p)
+    await query.edit_message_text(
+        f"🔍 *Panel #{idx+1} Session Check*\n🔗 `{p['url'][:60]}`\n\n{result}",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔍 আবার চেক করো", callback_data=f"panel_check:{idx}", style="danger")],
+            [InlineKeyboardButton("🔙 Back", callback_data=f"panel_log:{idx}", style="primary")],
+        ])
+    )
+
+# ═══════════════════════ Fake OTP Numbers — Admin UI ═══════════════════════
+async def cb_fake_otp_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    uid   = str(update.effective_user.id)
+    if not get_session(uid)["is_admin"] and not is_admin(uid):
+        return await query.answer("❌ Admin only")
+    await query.answer()
+    await _render_fake_otp_menu(query)
+
+async def _render_fake_otp_menu(query):
+    msg = f"🎭 *Fake OTP Numbers*\n\nTotal Batches: *{len(fake_otp_batches)}*\n\n"
+    rows = []
+    if not fake_otp_batches:
+        msg += "_এখনো কোনো batch যোগ করা হয়নি।_"
+    else:
+        for i, b in enumerate(fake_otp_batches):
+            svc    = services.get(b.get("service", "other"), {"icon": "📱", "name": b.get("service", "other")})
+            status = b.get("status", "running")
+            icon   = "🟢 Running" if status == "running" and b.get("numbers") else ("⚪ Completed" if not b.get("numbers") else "⏹️ Stopped")
+            msg += (
+                f"*Batch #{i+1}* — {svc['icon']} {svc['name']}\n"
+                f"🔢 {b.get('digits')} digit | ⏱ max {b.get('max_minutes')} min | "
+                f"📋 বাকি {len(b.get('numbers', []))}টা | {icon}\n\n"
+            )
+            rows.append([InlineKeyboardButton(f"🗑️ Stop/Delete Batch #{i+1}", callback_data=f"fake_del:{i}", style="danger")])
+
+    rows.append([InlineKeyboardButton("➕ Add Batch", callback_data="fake_otp_add", style="success")])
+    rows.append([InlineKeyboardButton("🔙 Back", callback_data="admin_back", style="primary")])
+    await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(rows))
+
+async def cb_fake_otp_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    uid   = str(update.effective_user.id)
+    if not get_session(uid)["is_admin"] and not is_admin(uid):
+        return await query.answer("❌ Admin only")
+    await query.answer()
+    rows = []
+    row  = []
+    for svc_id, svc in services.items():
+        row.append(InlineKeyboardButton(f"{svc['icon']} {svc['name']}", callback_data=f"fake_svc:{svc_id}", style="primary"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton("❌ Cancel", callback_data="fake_otp_menu", style="danger")])
+    await query.edit_message_text(
+        "🎭 *Add Fake OTP Batch — Step 1/4*\n\n📱 কোন Service-এর নামে fake OTP যাবে, বেছে নাও:",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(rows)
+    )
+
+async def cb_fake_svc_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    uid   = str(update.effective_user.id)
+    if not get_session(uid)["is_admin"] and not is_admin(uid):
+        return await query.answer("❌ Admin only")
+    await query.answer()
+    svc_id = query.data.split(":", 1)[1]
+    sess   = get_session(uid)
+    sess["state"]     = "admin_fake_digits"
+    sess["fake_data"] = {"service": svc_id}
+    await query.edit_message_text(
+        "🎭 *Add Fake OTP Batch — Step 2/4*\n\n"
+        "🔢 OTP কোড কত ডিজিটের হবে? (যেমন `5`):",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="fake_otp_menu", style="danger")]])
+    )
+
+async def cb_fake_del(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    uid   = str(update.effective_user.id)
+    if not get_session(uid)["is_admin"] and not is_admin(uid):
+        return await query.answer("❌ Admin only")
+    await query.answer()
+    idx = int(query.data.split(":")[1])
+    if idx >= len(fake_otp_batches):
+        return await query.edit_message_text("❌ Batch খুঁজে পাওয়া যায়নি।")
+    task = fake_otp_tasks.pop(idx, None)
+    if task:
+        task.cancel()
+    fake_otp_batches.pop(idx)
+    save_fake_otp_batches()
+    # ── ইনডেক্স শিফট হওয়ায় বাকি টাস্কগুলোর ম্যাপিং ঠিক করা ──
+    new_tasks = {}
+    for k, v in fake_otp_tasks.items():
+        new_tasks[k - 1 if k > idx else k] = v
+    fake_otp_tasks.clear()
+    fake_otp_tasks.update(new_tasks)
+    await _render_fake_otp_menu(query)
 
 async def cb_admin_global_wa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -3915,14 +5288,14 @@ async def cb_admin_global_wa(update: Update, context: ContextTypes.DEFAULT_TYPE)
             InlineKeyboardButton(
                 f"{'🔴 Disable' if enabled else '🟢 Enable'} WA Check",
                 callback_data="global_wa_toggle",
-                api_kwargs={"style": "success" if not enabled else "danger"}
+                style="success" if not enabled else "danger"
             ),
-            InlineKeyboardButton("🔌 Disconnect", callback_data="global_wa_disconnect", api_kwargs={"style": "danger"})
+            InlineKeyboardButton("🔌 Disconnect", callback_data="global_wa_disconnect", style="danger")
         ])
     else:
-        buttons.append([InlineKeyboardButton("📱 Connect WhatsApp", callback_data="global_wa_connect", api_kwargs={"style": "primary"})])
+        buttons.append([InlineKeyboardButton("📱 Connect WhatsApp", callback_data="global_wa_connect", style="primary")])
 
-    buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "primary"})])
+    buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_back", style="primary")])
     await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
 
 async def cb_global_wa_connect(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3936,7 +5309,7 @@ async def cb_global_wa_connect(update: Update, context: ContextTypes.DEFAULT_TYP
         "Example: `8801712345678`",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("❌ Cancel", callback_data="admin_global_wa", api_kwargs={"style": "danger"})
+            InlineKeyboardButton("❌ Cancel", callback_data="admin_global_wa", style="danger")
         ]])
     )
 
@@ -3964,48 +5337,231 @@ async def cb_global_wa_disconnect(update: Update, context: ContextTypes.DEFAULT_
 
 # ─── Global WA handle_text ───
 # (handle_text এ state "global_wa_phone" handle করা হবে)
-    query = update.callback_query
-    uid   = str(update.effective_user.id)
-    if not get_session(uid)["is_admin"] and not is_admin(uid):
-        return await query.answer("❌ Admin only")
-    await query.answer()
-    panels = load_panels()
-    msg = f"📡 *OTP Panels*\n\nTotal: *{len(panels)}*\n\n"
-    for i, p in enumerate(panels):
-        status = otp_panel_status.get(i, "stopped")
-        if status == "running":
-            icon = "🟢 Running"
-        elif status == "error":
-            icon = "🔴 Login Failed"
-        else:
-            icon = "⚫ Stopped"
-        label = PANEL_TYPE_LABEL.get(p.get('type', ''), p.get('type', ''))
-        msg += f"*{i+1}.* `{p['url']}`\n👤 `{p['username']}` | 🏷️ {label} | {icon}\n\n"
-
-    await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Add Panel", callback_data="panel_add:auto", api_kwargs={"style": "primary"})],
-        [InlineKeyboardButton("🗑️ Delete Panel", callback_data="panel_del", api_kwargs={"style": "danger"}),
-         InlineKeyboardButton("🔄 Restart All",  callback_data="panel_restart", api_kwargs={"style": "success"})],
-        [InlineKeyboardButton("🔙 Back", callback_data="admin_back", api_kwargs={"style": "primary"})],
-    ]))
 
 async def cb_panel_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     uid   = str(update.effective_user.id)
     await query.answer()
     ptype = query.data.split(":")[1] if ":" in query.data else "masdar_client"
+    label = PANEL_TYPE_LABEL.get(ptype, ptype)
+    cancel_kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("❌ Cancel", callback_data="admin_panels", style="danger")
+    ]])
+
+    if ptype == "provider2":
+        # ── Provider 2: ধাপে ধাপে জিজ্ঞেস করবে — Login URL → SMS URL → Username → Password → কলাম ──
+        sess = get_session(uid)
+        sess["state"]     = "admin_add_p2_loginurl"
+        sess["p2_data"]   = {}
+        await query.edit_message_text(
+            f"➕ *Add {label} Panel — Step 1/6*\n\n"
+            f"🔗 *Login URL* দিন (যেখানে username/password দিয়ে লগইন করবে):\n\n"
+            f"Example:\n`http://139.99.69.196/login`",
+            parse_mode="Markdown",
+            reply_markup=cancel_kb
+        )
+        return
+
     get_session(uid)["state"]      = "admin_add_panel"
     get_session(uid)["panel_type"] = ptype
-    label = PANEL_TYPE_LABEL.get(ptype, ptype)
-    await query.edit_message_text(
+    prompt = (
         f"➕ *Add {label} Panel*\n\n"
         f"Format: `URL username password`\n\n"
-        f"Example:\n`http://139.99.69.196 admin admin123`",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("❌ Cancel", callback_data="admin_panels", api_kwargs={"style": "danger"})
-        ]])
+        f"Example:\n`http://139.99.69.196 admin admin123`"
     )
+    await query.edit_message_text(prompt, parse_mode="Markdown", reply_markup=cancel_kb)
+
+# ── Provider 3 — Known Panels (আগে থেকে URL+Type সেট করা) + Custom Panel ──
+BUILTIN_PANELS = {
+    "ChoiceSMS":   {"url": "http://51.77.52.79/ints",          "ptype": "ints"},
+    "FlynSMS":     {"url": "http://91.232.105.47/ints",        "ptype": "ints"},
+    "Gaza":        {"url": "http://144.217.71.192/ints",       "ptype": "ints"},
+    "GoatPanel":   {"url": "http://167.114.117.67/ints",       "ptype": "ints"},
+    "HADI_SMS":    {"url": "http://2.59.169.96/ints",          "ptype": "ints"},
+    "ImsPanel":    {"url": "https://www.imssms.org",           "ptype": "ims"},
+    "KmSms":       {"url": "http://54.36.173.235/ints",        "ptype": "ints"},
+    "Konekta":     {"url": "https://konektapremium.net",       "ptype": "konekta"},
+    "MsiSMS":      {"url": "http://145.239.130.45/ints",       "ptype": "ints"},
+    "NumberPanel": {"url": "http://51.89.99.105/NumberPanel",  "ptype": "numberpanel"},
+    "ProofSMS":    {"url": "http://217.182.195.194/ints",      "ptype": "proofsms"},
+    "PurplePanel": {"url": "http://85.195.94.50/sms",          "ptype": "standard"},
+    "RoxySMS":     {"url": "http://www.roxysms.net",           "ptype": "roxy"},
+    "Seven1Tel":   {"url": "http://94.23.120.156/ints",        "ptype": "ints"},
+    "SharkSMS":    {"url": "http://65.109.111.158/ints",       "ptype": "ints"},
+    "TrueSMS":     {"url": "https://truesms.net",              "ptype": "standard"},
+    "VoiceGate":   {"url": "http://51.89.7.175/sms",           "ptype": "voicegate"},
+    "Wolf":        {"url": "http://213.32.24.208/ints",        "ptype": "ints"},
+    "GreenSMS":    {"url": "http://139.99.9.4/ints",           "ptype": "ints"},
+    "MarkOI":      {"url": "http://51.75.144.178/ints",        "ptype": "ints"},
+    "FireSMS":     {"url": "http://54.39.104.241/ints",        "ptype": "ints"},
+    "SniperPanel": {"url": "http://135.125.222.224/ints",      "ptype": "ints"},
+    "MAIT":        {"url": "http://168.119.13.175/ints",       "ptype": "ints"},
+    "TimeSMS":     {"url": "https://www.timesms.org",          "ptype": "timesms"},
+}
+
+PROVIDER3_TYPES = ["ints", "ims", "konekta", "standard", "proofsms",
+                   "roxy", "voicegate", "numberpanel", "timesms"]
+
+async def cb_panel_add_p3_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    uid   = str(update.effective_user.id)
+    if not get_session(uid)["is_admin"] and not is_admin(uid):
+        return await query.answer("❌ Admin only")
+    await query.answer()
+    rows = []
+    row  = []
+    for name in sorted(BUILTIN_PANELS.keys()):
+        row.append(InlineKeyboardButton(name, callback_data=f"p3_builtin:{name}", style="success"))
+        if len(row) == 3:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton("✏️ Custom Panel", callback_data="panel_add_p3_custom", style="primary")])
+    rows.append([InlineKeyboardButton("❌ Cancel", callback_data="admin_panels", style="danger")])
+    await query.edit_message_text(
+        "🧩 *Add Provider 3 Panel*\n\n"
+        "চেনা প্যানেল হলে নিচ থেকে নাম বেছে নাও (URL+Type আগে থেকেই সেট করা থাকবে, শুধু username/password দিতে হবে)।\n\n"
+        "লিস্টে না থাকলে *✏️ Custom Panel* চাপো।",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(rows)
+    )
+
+async def cb_p3_builtin_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    uid   = str(update.effective_user.id)
+    if not get_session(uid)["is_admin"] and not is_admin(uid):
+        return await query.answer("❌ Admin only")
+    await query.answer()
+    name = query.data.split(":", 1)[1]
+    info = BUILTIN_PANELS.get(name)
+    if not info:
+        return await query.edit_message_text("❌ প্যানেল খুঁজে পাওয়া যায়নি।")
+    sess = get_session(uid)
+    sess["state"]   = "admin_add_p3_username"
+    sess["p3_data"] = {"subtype": info["ptype"], "url": info["url"], "builtin_name": name}
+    await query.edit_message_text(
+        f"🧩 *Add {name} ({info['ptype']}) — Step 1/2*\n\n"
+        f"🔗 URL: `{info['url']}` (auto)\n\n"
+        f"👤 *Username* দিন:",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_panels", style="danger")]])
+    )
+
+async def cb_panel_add_p3_custom(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    uid   = str(update.effective_user.id)
+    if not get_session(uid)["is_admin"] and not is_admin(uid):
+        return await query.answer("❌ Admin only")
+    await query.answer()
+    rows = []
+    row  = []
+    for pt in PROVIDER3_TYPES:
+        row.append(InlineKeyboardButton(pt, callback_data=f"p3_type:{pt}", style="primary"))
+        if len(row) == 3:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton("❌ Cancel", callback_data="admin_panels", style="danger")])
+    await query.edit_message_text(
+        "✏️ *Custom Panel*\n\n"
+        "তোমার প্যানেলটা কোন টাইপের সেটা বেছে নাও:\n\n"
+        "👉 বেশিরভাগ প্যানেল *ints* টাইপ — না জানলে প্রথমে *ints* দিয়ে ট্রাই করো।",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(rows)
+    )
+
+async def cb_p3_type_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    uid   = str(update.effective_user.id)
+    if not get_session(uid)["is_admin"] and not is_admin(uid):
+        return await query.answer("❌ Admin only")
+    await query.answer()
+    ptype = query.data.split(":")[1]
+    sess  = get_session(uid)
+    sess["state"]   = "admin_add_p3_url"
+    sess["p3_data"] = {"subtype": ptype}
+    await query.edit_message_text(
+        f"🧩 *Add Provider 3 ({ptype}) — Step 1/3*\n\n"
+        f"🔗 *Panel URL* দিন:\n\n"
+        f"Example:\n`http://51.77.52.79/ints`",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_panels", style="danger")]])
+    )
+
+# ── Provider 4 — Power SMS Panel এর নিজস্ব API (base URL + API token, login লাগে না) ──
+async def cb_panel_add_p4_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    uid   = str(update.effective_user.id)
+    if not get_session(uid)["is_admin"] and not is_admin(uid):
+        return await query.answer("❌ Admin only")
+    await query.answer()
+    sess = get_session(uid)
+    sess["state"]   = "admin_add_p4_url"
+    sess["p4_data"] = {}
+    await query.edit_message_text(
+        "🌐 *Add Provider 4 — Step 1/2*\n\n"
+        "🔗 *Base URL* দিন:\n\n"
+        "Example:\n`https://your-power-sms-panel.com`",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_panels", style="danger")]])
+    )
+
+# ── Provider 5 — Session Cookie (PHPSESSID) ভিত্তিক, লগইন করার দরকার নাই ──
+async def cb_panel_add_p5_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    uid   = str(update.effective_user.id)
+    if not get_session(uid)["is_admin"] and not is_admin(uid):
+        return await query.answer("❌ Admin only")
+    await query.answer()
+    sess = get_session(uid)
+    sess["state"] = "admin_add_p5_raw"
+    await query.edit_message_text(
+        "🍪 *Add Provider 5 (Cookie) — Raw Request*\n\n"
+        "ব্রাউজারের Network Tab থেকে পুরো রিকোয়েস্ট ব্লকটা (GET লাইন + Host + Cookie সহ) "
+        "হুবহু কপি করে **একবারেই** পেস্ট করে দাও — বট নিজে থেকেই URL, Host আর Cookie বের করে নিবে।\n\n"
+        "Example:\n"
+        "```\n"
+        "GET /ints/agent/res/data_smscdr.php?fdate1=...&csstr=... HTTP/1.1\n"
+        "Host: 168.119.13.175\n"
+        "...\n"
+        "Cookie: PHPSESSID=abc123...\n"
+        "```",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_panels", style="danger")]])
+    )
+
+def _parse_raw_http_request(raw_text: str):
+    """ব্রাউজার থেকে কপি করা raw HTTP request ব্লক থেকে URL, Host, Cookie বের করে।
+    রিটার্ন করে (full_url, host, cookie_header) — কিছু না পেলে None।"""
+    lines = raw_text.strip().splitlines()
+    if not lines:
+        return None
+    m = re.match(r'^(?:GET|POST)\s+(\S+)\s+HTTP', lines[0].strip(), re.IGNORECASE)
+    if not m:
+        return None
+    path = m.group(1)
+
+    host   = None
+    cookie = None
+    for line in lines[1:]:
+        line = line.strip()
+        if not line:
+            continue
+        low = line.lower()
+        if low.startswith("host:"):
+            host = line.split(":", 1)[1].strip()
+        elif low.startswith("cookie:"):
+            cookie = line.split(":", 1)[1].strip()
+
+    if not host or not cookie:
+        return None
+
+    full_url = f"http://{host}{path}"
+    return full_url, host, cookie
+
+
 
 async def cb_panel_del(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query  = update.callback_query
@@ -4016,7 +5572,7 @@ async def cb_panel_del(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_panels")]]))
     buttons = [[InlineKeyboardButton(f"🗑️ {i+1}. {p['url']}", callback_data=f"panel_del_confirm:{i}")]
                for i, p in enumerate(panels)]
-    buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_panels", api_kwargs={"style": "primary"})])
+    buttons.append([InlineKeyboardButton("🔙 Back", callback_data="admin_panels", style="primary")])
     await query.edit_message_text("🗑️ *কোন panel delete করবে?*", parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(buttons))
 
@@ -4048,6 +5604,11 @@ async def cb_panel_restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── Main ───
 def main():
     app = Application.builder().token(BOT_TOKEN).concurrent_updates(True).build()
+
+    # ── extra_features: rate limiter, ban, i18n, user manager, analytics, targeted broadcast … ──
+    # (অবশ্যই অন্য handler যোগ করার আগে)
+    import extra_features
+    extra_features.setup(app, globals())
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("adminlogin", cmd_adminlogin))
@@ -4105,6 +5666,9 @@ def main():
     app.add_handler(CallbackQueryHandler(cb_as_price, pattern="^as_price$"))
     app.add_handler(CallbackQueryHandler(cb_as_minw, pattern="^as_minw$"))
     app.add_handler(CallbackQueryHandler(cb_as_referral_commission, pattern="^as_referral_commission$"))
+    app.add_handler(CallbackQueryHandler(cb_as_panel_interval, pattern="^as_panel_interval$"))
+    app.add_handler(CallbackQueryHandler(cb_as_queue_interval, pattern="^as_queue_interval$"))
+    app.add_handler(CallbackQueryHandler(cb_as_queue_expiry, pattern="^as_queue_expiry$"))
     app.add_handler(CallbackQueryHandler(cb_admin_referral_stats, pattern="^admin_referral_stats$"))
     app.add_handler(CallbackQueryHandler(cb_admin_add_numbers, pattern="^admin_add_numbers$"))
     app.add_handler(CallbackQueryHandler(cb_admin_withdrawals, pattern="^admin_withdrawals$"))
@@ -4136,6 +5700,19 @@ def main():
     app.add_handler(CallbackQueryHandler(cb_global_wa_disconnect, pattern="^global_wa_disconnect$"))
     app.add_handler(CallbackQueryHandler(cb_admin_panels, pattern="^admin_panels$"))
     app.add_handler(CallbackQueryHandler(cb_panel_add, pattern="^panel_add:"))
+    app.add_handler(CallbackQueryHandler(cb_panel_add_p3_menu, pattern="^panel_add_p3_menu$"))
+    app.add_handler(CallbackQueryHandler(cb_panel_add_p4_menu, pattern="^panel_add_p4_menu$"))
+    app.add_handler(CallbackQueryHandler(cb_panel_add_p5_menu, pattern="^panel_add_p5_menu$"))
+    app.add_handler(CallbackQueryHandler(cb_panel_logs_menu, pattern="^panel_logs_menu$"))
+    app.add_handler(CallbackQueryHandler(cb_panel_log_view, pattern="^panel_log:"))
+    app.add_handler(CallbackQueryHandler(cb_panel_check, pattern="^panel_check:"))
+    app.add_handler(CallbackQueryHandler(cb_fake_otp_menu, pattern="^fake_otp_menu$"))
+    app.add_handler(CallbackQueryHandler(cb_fake_otp_add, pattern="^fake_otp_add$"))
+    app.add_handler(CallbackQueryHandler(cb_fake_svc_select, pattern="^fake_svc:"))
+    app.add_handler(CallbackQueryHandler(cb_fake_del, pattern="^fake_del:"))
+    app.add_handler(CallbackQueryHandler(cb_p3_builtin_select, pattern="^p3_builtin:"))
+    app.add_handler(CallbackQueryHandler(cb_panel_add_p3_custom, pattern="^panel_add_p3_custom$"))
+    app.add_handler(CallbackQueryHandler(cb_p3_type_select, pattern="^p3_type:"))
     app.add_handler(CallbackQueryHandler(cb_panel_del, pattern="^panel_del$"))
     app.add_handler(CallbackQueryHandler(cb_panel_del_confirm, pattern="^panel_del_confirm:"))
     app.add_handler(CallbackQueryHandler(cb_panel_restart, pattern="^panel_restart$"))
@@ -4152,8 +5729,11 @@ def main():
         _tg_app = application
         asyncio.create_task(scheduled_membership_check(application))
         asyncio.create_task(green_api_monitor(application))
+        asyncio.create_task(dm_retry_worker(application))  # ── rate-limit এ miss হওয়া DM পরে পাঠানোর worker ──
         await start_http_server()
         start_all_panels(application)  # ── OTP Panels শুরু করো ──
+        start_all_fake_otp_batches(application)  # ── Fake OTP batches শুরু করো ──
+        extra_features.start_background(application)  # ── analytics report / low-stock alert / data flush ──
 
     app.post_init = post_init
 
