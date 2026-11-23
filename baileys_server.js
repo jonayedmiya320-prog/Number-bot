@@ -18,6 +18,15 @@ const fs = require("fs");
 const app = express();
 app.use(express.json());
 
+// ── Global crash guard — ছোট unexpected error/promise-rejection এ যেন পুরো
+//    প্রসেস বন্ধ না হয়ে যায় (Baileys/WhatsApp লাইব্রেরিতে মাঝেমধ্যে এমন হয়) ──
+process.on("uncaughtException", (err) => {
+  console.error("❌ Uncaught Exception (প্রসেস চালু আছে):", err);
+});
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("❌ Unhandled Rejection (প্রসেস চালু আছে):", reason);
+});
+
 const PORT = process.env.PORT || 3000;
 const AUTH_BASE = process.env.AUTH_DIR || "./wa_auth";
 
