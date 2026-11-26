@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # ─── Configuration ───
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "7907217678:AAHAmCLtMKr0JLK4g0b0cNX965nFtsBMXy8")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "9012545394:AAFJivO6I02Stiu5hSKyzZuhodoqP-x4_aY")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "sadhin16165")
 
 MAIN_CHANNEL     = "@earning_hub_official_channel"
